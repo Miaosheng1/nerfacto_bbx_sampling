@@ -74,6 +74,8 @@ class DataparserOutputs:
     """Dictionary of any metadata that be required for the given experiment.
     Will be processed by the InputDataset to create any additional tensors that may be required.
     """
+    fisheye_dict = None
+
 
     def as_dict(self) -> dict:
         """Returns the dataclass as a dictionary."""

@@ -66,6 +66,8 @@ class NerfstudioDataParserConfig(DataParserConfig):
     train_split_percentage: float = 0.9
     """The percent of images to use for training. The remaining images are for eval."""
     annotation_3d = None
+    """use fisheye """
+    use_fisheye = False
 
 
 @dataclass
@@ -194,7 +196,7 @@ class Nerfstudio(DataParser):
 
         if split == "train":
             indices = i_train
-            print(f"Train View:  {indices}" + f"Train View Num{len(i_train)}")
+            print(f"Train View:  {indices}\n" + f"Train View Num: {len(i_train)}")
         elif split in ["val", "test"]:
             indices = i_eval
             print(f"Test View: {indices}" + f"Test View Num{len(i_eval)}")
@@ -262,7 +264,7 @@ class Nerfstudio(DataParser):
             distortion_params = torch.stack(distort, dim=0)[idx_tensor]
 
         ## Where Use bounding box ,if Used,need to read instance image and bbx
-        if meta['use_bbx']:
+        if "use_bbx" in meta and meta['use_bbx']:
             print(f"BBx Abled!")
             bbx2world = np.array(meta["bbx2w"])
             bbox = []
@@ -270,6 +272,7 @@ class Nerfstudio(DataParser):
             data_dir = '/data/datasets/KITTI-360/'
             instance_path = os.path.join(data_dir, 'data_2d_semantics', 'train',
                                          '2013_05_28_drive_0000_sync', 'image_00/instance')
+            ## 这里的400 是针对我的数据集的
             for idx in range(400, 400 + 40, 1):
                 img_file = os.path.join(instance_path, "{:010d}.png".format(idx))
                 instance_imgs.append(cv.imread(img_file, -1))
@@ -284,23 +287,34 @@ class Nerfstudio(DataParser):
             ''' 将3D 的bbx 投影到2D 验证bbx 是否正确'''
             # all_bbxes = self.load_bbx_for_test(instance_imgs=instance_imgs, bbx2w=bbx2world)
             # self.project2Dbbx(bbx=all_bbxes, img_idx=0, f=fx, cx=cx, cy=cy, img_file=image_filenames)
+            cameras = Cameras(
+                fx=fx,
+                fy=fy,
+                cx=cx,
+                cy=cy,
+                distortion_params=distortion_params,
+                height=height,
+                width=width,
+                camera_to_worlds=poses[:, :3, :4],
+                camera_type=camera_type,
+                bounding_box=all_bbxes,
+                test_idx=i_eval,
+                train_idx=i_train,
+            )
         else:
             print(f"BBx Unabled!")
 
-        cameras = Cameras(
-            fx=fx,
-            fy=fy,
-            cx=cx,
-            cy=cy,
-            distortion_params=distortion_params,
-            height=height,
-            width=width,
-            camera_to_worlds=poses[:, :3, :4],
-            camera_type=camera_type,
-            bounding_box=all_bbxes,
-            test_idx= i_eval,
-            train_idx= i_train,
-        )
+            cameras = Cameras(
+                fx=fx,
+                fy=fy,
+                cx=cx,
+                cy=cy,
+                distortion_params=distortion_params,
+                height=height,
+                width=width,
+                camera_to_worlds=poses[:, :3, :4],
+                camera_type=camera_type,
+            )
 
         assert self.downscale_factor is not None
         cameras.rescale_output_resolution(scaling_factor=1.0 / self.downscale_factor)
@@ -311,7 +325,45 @@ class Nerfstudio(DataParser):
             scene_box=scene_box,
             mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
         )
+
+        ## add fisheye param  如果要加 fisheye 记得在json 文件里 加上use_fisheye 的选项
+        if self.config.use_fisheye and 'use_fisheye' in meta:
+            fisheye_poses, fisheye_imgs, fisheye_meta,mask = self.load_fish_eye_param(diff_mean_poses=diff_mean_poses, scale_factor=scale_factor,config_data=self.config.data)
+            fisheye_dict = {
+                'pose':fisheye_poses,
+                'imgs':fisheye_imgs,
+                'meta':fisheye_meta,
+                'mask':mask,
+            }
+            dataparser_outputs.fisheye_dict = fisheye_dict
         return dataparser_outputs
+
+    def load_fish_eye_param(self,diff_mean_poses,scale_factor,config_data = None, use_mask = True):
+
+        meta = load_from_json(config_data / Path("transforms_fisheye.json"))
+        image_filenames = []
+        poses = []
+        images = []
+
+        for frame in meta["frames"]:
+            filepath = PurePath(frame["file_path"])
+            fname = Path(config_data) / filepath
+            pil_image = Image.open(fname)
+            image = np.array(pil_image, dtype="uint8") / 255.0
+            images.append(image)
+            image_filenames.append(fname)
+            poses.append(np.array(frame["transform_matrix"]))
+
+        poses = torch.from_numpy(np.array(poses).astype(np.float32))
+        images = torch.from_numpy(np.array(images).astype(np.float32))
+
+        poses[:, :3, -1] -= diff_mean_poses
+        poses[:, :3, 3] *= scale_factor
+
+
+        fisheye_mask = cv.imread(str(config_data) + "/mask.png")/ 255.0
+        fisheye_mask = fisheye_mask.astype(np.int32)[...,0]
+        return poses, images, meta,fisheye_mask
 
     def _get_fname(self, filepath: PurePath, downsample_folder_prefix="images_") -> Path:
         """Get the filename of the image file.

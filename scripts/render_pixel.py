@@ -173,7 +173,7 @@ class RenderDatasets():
             camera_ray_bundle = cameras.generate_rays(camera_indices=camera_idx)
             with torch.no_grad():
                 # outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
-                ## Debug 特定光线的 pts
+                ## Debug 特定光线的 pts (Bounding Box 的实验 setting)
                 outputs = pipeline.model.get_outputs_for_fixed_raybundle(camera_ray_bundle,pixel_x=p_x,pixel_y=p_y)
             for rendered_output_name in self.rendered_output_names:
                 if rendered_output_name not in outputs:
@@ -235,3 +235,5 @@ if __name__ == "__main__":
     config = parser.parse_args()
 
     RenderDatasets(config).main()
+
+

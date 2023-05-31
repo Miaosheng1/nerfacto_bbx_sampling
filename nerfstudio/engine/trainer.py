@@ -174,7 +174,7 @@ class Trainer:
                     writer.put_dict(name="Train Metrics Dict", scalar_dict=metrics_dict, step=step)
 
                 ## eval 所有的 照片
-                #self.eval_iteration(step)
+                self.eval_iteration(step)
 
                 if step_check(step, self.config.trainer.steps_per_save):
                     self.save_checkpoint(step)

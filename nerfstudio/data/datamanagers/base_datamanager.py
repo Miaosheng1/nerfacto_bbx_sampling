@@ -150,6 +150,8 @@ class DataManager(nn.Module):
             self.setup_train()
         if self.eval_dataset and self.test_mode != "inference":
             self.setup_eval()
+        ''' PreLoaded all fisheye rays to shuffle'''
+        self.batch_fisheye_rays = None
 
     def forward(self):
         """Blank forward method
@@ -414,18 +416,316 @@ class VanillaDataManager(DataManager):  # pylint: disable=abstract-method
         """Returns the next batch of data from the train dataloader."""
         self.train_count += 1
         image_batch = next(self.iter_train_image_dataloader).copy()
-
-        ## 实现每次训练 仅仅从一张图像进行随机采样的 功能. Fixed image + Random Ray
-        # train_idx = image_batch["image_idx"].detach().cpu().numpy().tolist()
-        # random_idx = np.random.choice(train_idx)
-        # image_batch['image_idx'] = image_batch['image_idx'][random_idx].unsqueeze(0)
-        # image_batch['image'] = image_batch['image'][random_idx,...].unsqueeze(0)
-        # print(f"Current Image idx is {image_batch['image_idx'].detach().cpu().numpy()}")
-
         batch = self.train_pixel_sampler.sample(image_batch)
         ray_indices = batch["indices"]
         ray_bundle = self.train_ray_generator(ray_indices)
+
         return ray_bundle, batch
+
+    def load_fisheye_ray(self):
+        poses = self.train_dataset.dataparser.fisheye_dict['pose'].to('cuda')
+        poses = poses * torch.tensor([1, -1, -1, 1]).to('cuda')  ## fisheye 生成光线的时候 pose 应该是位于 OPENCV 坐标系之下
+        images = self.train_dataset.dataparser.fisheye_dict['imgs']
+        meta = self.train_dataset.dataparser.fisheye_dict['meta']
+        fisheye_mask = self.train_dataset.dataparser.fisheye_dict['mask']
+
+        imgs_idx = np.arange(len(self.train_dataset._dataparser_outputs.fisheye_dict['imgs']))
+        self.batch_fisheye_rays = torch.stack(
+            [self.generate_fixed_index_ray(img_idx=i, meta=meta, poses=poses, images=images, mask=fisheye_mask) for i in
+             imgs_idx], 0)
+        self.batch_fisheye_rays = self.batch_fisheye_rays.reshape(-1,12)
+        print("Load Fisheye Rays Loaded !")
+        return
+
+    def generate_fixed_index_ray(self,img_idx = -1,meta=None,poses=None,offset=0.5,images=None,mask = None):
+        ## if 奇数
+        if img_idx % 2 == 0:
+            k1 = meta['k1_02']
+            k2 = meta['k2_02']
+            gamma1 = meta['gamma1_02']
+            gamma2 = meta['gamma2_02']
+            u0 = meta['u0_02']
+            v0 = meta['v0_02']
+            mirror = meta['mirror_02']
+        else:
+            k1 = meta['k1_03']
+            k2 = meta['k2_03']
+            gamma1 = meta['gamma1_03']
+            gamma2 = meta['gamma2_03']
+            u0 = meta['u0_03']
+            v0 = meta['v0_03']
+            mirror = meta['mirror_03']
+
+        img = images[img_idx]
+
+        pixels_y, pixels_x = np.where(mask == 1)
+        pixels_y = torch.from_numpy(pixels_y).long()
+        pixels_x = torch.from_numpy(pixels_x).long()
+        color = img[(pixels_y, pixels_x)].reshape(-1, 3).to('cuda')
+
+        pixels_x = pixels_x + offset
+        pixels_y = pixels_y + offset
+
+
+        iter = 1000
+        map_dist = []
+        z_dist = []
+        ro2 = np.linspace(0.0, 1.0, iter)
+        dis_cofficient = 1 + k1 * ro2 + k2 * ro2 * ro2
+        ro2_after = np.sqrt(ro2) * (1 + k1 * ro2 + k2 * ro2 * ro2)  ## 畸变之后的 rou
+        map_dist = np.stack([dis_cofficient, ro2_after])
+        map_dist = np.moveaxis(map_dist, -1, 0)
+
+        z = np.linspace(0.0, 1.0, iter)
+        z_after = np.sqrt(1 - z ** 2) / (z + mirror)
+        z_dist = np.stack([z, z_after])
+        z_dist = np.moveaxis(z_dist, -1, 0)
+
+        map_dist = torch.from_numpy(map_dist)
+        z_dist = torch.from_numpy(z_dist)
+
+        ## 1. 将像素坐标系投影到归一化坐标系（畸变之后的坐标）
+        x = (pixels_x - u0) / gamma1
+        y = (pixels_y - v0) / gamma2
+        dist = torch.sqrt(x * x + y * y)
+        indx = torch.abs(map_dist[:, 1:] - dist[None, :]).argmin(dim=0)
+
+        ##2. 除以畸变系数，得到畸变之前的 坐标
+        x /= map_dist[indx, 0]
+        y /= map_dist[indx, 0]
+
+        ## 3.查找出 去畸变之后的 （x_undistortion,y_undistortion）对应的 Z_unitsphere 上的坐标,并根据Z_unitsphere 得到 投影前 x_unitsphere,y_unitsphere
+        z_after = torch.sqrt(x * x + y * y)
+        indx = torch.abs(z_dist[:, 1:] - z_after[None, :]).argmin(dim=0)
+        x *= (z_dist[indx, 0] + mirror)
+        y *= (z_dist[indx, 0] + mirror)
+        xy = torch.stack((x, y))
+        xys = xy.permute(1, 0)
+
+        ## 4. 根据 （x_undistortion,y_undistortion） 得到z 数值，即在球面坐标系的坐标。（Camera Coordinates）
+        z = torch.sqrt(1. - torch.norm(xys, dim=1, p=2) ** 2)
+        isnan = z.isnan()
+        z[isnan] = 1.
+        left_fisheye_grid = torch.cat((xys, z[:, None], isnan[:, None]), dim=1)
+
+        ## 5.筛选出在单位球上的有效点，因为并不是所有的点都是有效的
+        valid = left_fisheye_grid[:, 3] < 0.5
+        left_valid = left_fisheye_grid[valid, :3]
+
+        ## 产生有效的光线,将相机坐标系的光线ray_d 转化到 世界坐标系下面
+        dirs = left_valid.to(self.device)
+        # dirs = dirs / torch.linalg.norm(dirs, ord=2, dim=-1, keepdim=True)  # W, H, 3
+        rays_v = torch.sum(
+            # [..., N_rays, 1, 3] * [..., 1, 3, 3]
+            dirs[..., None, :] * poses[img_idx, None, :3, :3], -1
+        )
+        rays_o = poses[img_idx, None, :3, 3].expand(rays_v.shape)
+        color = color[valid, :]
+
+
+        remain_num = np.random.randint(0, rays_v.shape[0],size = int(1e6))
+        img_idx = torch.tensor(img_idx).expand(pixels_x.shape[0])
+        pixels = torch.stack([img_idx, pixels_y-0.5, pixels_x-0.5], dim=1).to('cuda')
+
+
+        pixels = pixels[valid, :]
+
+        return torch.concat([rays_o[remain_num], rays_v[remain_num], color[remain_num],pixels[remain_num]],dim=1)
+
+    def next_train_fisheye_shuffle(self, step: int) -> Tuple[RayBundle, Dict]:
+        self.train_count += 1
+        batch_size = 4096
+        selected_index = np.random.randint(0,self.batch_fisheye_rays.shape[0],size = batch_size )
+        rays_batch = self.batch_fisheye_rays[selected_index]
+        rays_o,rays_d, true_color, indices =  rays_batch[:,:3],rays_batch[:,3:6], rays_batch[:, 6: 9], rays_batch[:, 9: 12]
+        directions_norm = torch.norm(rays_d, dim=-1, keepdim=True)
+
+        camera_indx = torch.tensor(indices[:,0] + len(self.train_dataset))[:,None].to(self.device)
+
+        from nerfstudio.cameras.rays import RayBundle
+        raybundle = RayBundle(
+            origins=rays_o,
+            directions=rays_d,
+            pixel_area=None,
+            camera_indices=0,
+            directions_norm=directions_norm,
+            times=None,
+        )
+        raybundle.camera_indices = camera_indx.int()
+        indices[:, 0] += len(self.train_dataset)
+        batch = {
+            "image": true_color,
+            "indices": indices
+        }
+        return raybundle, batch
+
+
+
+    """
+    def next_train_fisheye(self, step: int) -> Tuple[RayBundle, Dict]:
+        self.train_count += 1
+        ## 利用fisheye 生成 ray_bundle_fisheye
+        ray_bundle_fisheye,batch = self.train_fisheye_ray_generate(batch_size=4096)
+        return ray_bundle_fisheye,batch
+
+    def train_fisheye_ray_generate(self,batch_size):
+        poses = self.train_dataset.dataparser.fisheye_dict['pose'].to('cuda')
+        poses = poses * torch.tensor([1, -1, -1, 1]).to('cuda')   ## fisheye 生成光线的时候 pose 应该是位于 OPENCV 坐标系之下
+        images = self.train_dataset.dataparser.fisheye_dict['imgs']
+        meta = self.train_dataset.dataparser.fisheye_dict['meta']
+        fisheye_mask = self.train_dataset.dataparser.fisheye_dict['mask']
+        ## generate random image index and random image pixel
+        indices,img_idx = self.generate_random_pixel(batch_size=batch_size*2,mask=fisheye_mask)
+
+        fisheye_idx = img_idx-len(self.train_dataset)
+        selected_img = images[fisheye_idx]
+
+        ## generate ray_o and rays_d for fisheye
+        rays_o, rays_d,true_rgb,selected_indices = self.generate_ray_for_fisheye(indices=indices,
+                                                        img_idx=fisheye_idx,
+                                                        meta=meta,
+                                                        poses=poses,
+                                                        img = selected_img)
+        rays_o = rays_o[:batch_size]
+        rays_d = rays_d[:batch_size]
+        true_rgb = true_rgb[:batch_size]
+        indices = selected_indices[:batch_size]
+
+        directions_norm = torch.norm(rays_d, dim=-1, keepdim=True)
+
+        ## 根据ray_o 和 ray_d  去构造 ray_bundle
+        camera_indx = torch.tensor(img_idx ).to(self.device)
+
+        from nerfstudio.cameras.rays import RayBundle
+        raybundle = RayBundle(
+            origins=rays_o,
+            directions=rays_d,
+            pixel_area=None,
+            camera_indices= camera_indx.expand_as(directions_norm),
+            directions_norm=directions_norm,
+            times=None,
+        )
+
+        indices[:,0] += len(self.train_dataset)
+        batch ={
+            "image":true_rgb,
+            "indices":indices
+        }
+        return raybundle,batch
+
+    def generate_ray_for_fisheye(self,indices,img_idx,meta,poses,img,offset=0.5):
+        ## if 奇数
+        if img_idx % 2 == 0:
+            k1 = meta['k1_02']
+            k2 = meta['k2_02']
+            gamma1 = meta['gamma1_02']
+            gamma2 = meta['gamma2_02']
+            u0 = meta['u0_02']
+            v0 = meta['v0_02']
+            mirror = meta['mirror_02']
+        else:
+            k1 = meta['k1_03']
+            k2 = meta['k2_03']
+            gamma1 = meta['gamma1_03']
+            gamma2 = meta['gamma2_03']
+            u0 = meta['u0_03']
+            v0 = meta['v0_03']
+            mirror = meta['mirror_03']
+
+
+        pixels_x = torch.from_numpy(indices[:,0])
+        pixels_y = torch.from_numpy(indices[:,1])
+
+        color = img[(pixels_y, pixels_x)].reshape(-1, 3).to('cuda')
+
+        pixels_x = pixels_x + offset
+        pixels_y = pixels_y + offset
+
+        iter = 10000
+        map_dist = []
+        z_dist = []
+        ro2 = np.linspace(0.0, 1.0, iter)
+        dis_cofficient = 1 + k1 * ro2 + k2 * ro2 * ro2
+        ro2_after = np.sqrt(ro2) * (1 + k1 * ro2 + k2 * ro2 * ro2)  ## 畸变之后的 rou
+        # map_dist.append([(1 + k1*ro2 + k2*ro2*ro2), ro2_after])
+        map_dist = np.stack([dis_cofficient, ro2_after])
+        map_dist = np.moveaxis(map_dist, -1, 0)
+
+        z = np.linspace(0.0, 1.0, iter)
+        z_after = np.sqrt(1 - z ** 2) / (z + mirror)
+        z_dist = np.stack([z, z_after])
+        z_dist = np.moveaxis(z_dist, -1, 0)
+
+        map_dist = torch.from_numpy(map_dist)
+        z_dist = torch.from_numpy(z_dist)
+
+        ## 1. 将像素坐标系投影到归一化坐标系（畸变之后的坐标）
+        x = (pixels_x - u0) / gamma1
+        y = (pixels_y - v0) / gamma2
+        dist = torch.sqrt(x * x + y * y)
+        indx = torch.abs(map_dist[:, 1:] - dist[None, :]).argmin(dim=0)
+
+        ##2. 除以畸变系数，得到畸变之前的 坐标
+        x /= map_dist[indx, 0]
+        y /= map_dist[indx, 0]
+
+        ## 3.查找出 去畸变之后的 （x_undistortion,y_undistortion）对应的 Z_unitsphere 上的坐标,并根据Z_unitsphere 得到 投影前 x_unitsphere,y_unitsphere
+        z_after = torch.sqrt(x * x + y * y)
+        indx = torch.abs(z_dist[:, 1:] - z_after[None, :]).argmin(dim=0)
+        x *= (z_dist[indx, 0] + mirror)
+        y *= (z_dist[indx, 0] + mirror)
+        xy = torch.stack((x, y))
+        xys = xy.permute(1, 0)
+
+        ## 4. 根据 （x_undistortion,y_undistortion） 得到z 数值，即在球面坐标系的坐标。（Camera Coordinates）
+        z = torch.sqrt(1. - torch.norm(xys, dim=1, p=2) ** 2)
+        isnan = z.isnan()
+        z[isnan] = 1.
+        left_fisheye_grid = torch.cat((xys, z[:, None], isnan[:, None]), dim=1)
+
+        ## 5.筛选出在单位球上的有效点，因为并不是所有的点都是有效的
+        valid = left_fisheye_grid[:, 3] < 0.5
+        left_valid = left_fisheye_grid[valid, :3]
+
+        ## 产生有效的光线,将相机坐标系的光线ray_d 转化到 世界坐标系下面
+        dirs = left_valid.to(self.device)
+        # dirs = dirs / torch.linalg.norm(dirs, ord=2, dim=-1, keepdim=True)  # W, H, 3
+        rays_v = torch.sum(
+            # [..., N_rays, 1, 3] * [..., 1, 3, 3]
+            dirs[..., None, :] * poses[img_idx, None, :3, :3], -1
+        )
+        rays_o = poses[img_idx, None, :3, 3].expand(rays_v.shape)
+
+
+        color = color[valid, :]
+
+        img_idx = torch.tensor(img_idx).expand(pixels_x.shape[0])
+        pixels = torch.stack([img_idx,pixels_y,pixels_x],dim=1)
+        pixels = pixels[valid,:]
+
+        return rays_o,rays_v,color,pixels
+
+
+    ## 将fisheye 的index 设定为 pinehole cameara 之后的 index
+    def generate_random_pixel(self,batch_size,mask):
+        ## generate fixed index and random pixel
+        start_index = len(self.train_dataset)
+        end_index = start_index + len(self.train_dataset._dataparser_outputs.fisheye_dict['imgs'])
+        imgae_idx = np.random.choice(np.arange(start_index, end_index))  ## 将 fisheye 的 index 从16 到 36
+
+        ## No Mask
+        pixel_y = np.random.randint(0, 1400, size=batch_size)
+        pixel_x = np.random.randint(0, 1400, size=batch_size)
+        index = np.stack([pixel_y, pixel_x], axis=0).transpose(1, 0)
+
+        ## Mask
+        # pixel_y, pixel_x = np.where(mask == 1)
+        # index = np.stack([pixel_y, pixel_x],axis=0).transpose(1,0)
+        # choose = np.random.randint(0, index.shape[0],size = batch_size)
+        # index = index[choose]
+
+        return index,imgae_idx
+    """
 
     def next_eval(self, step: int) -> Tuple[RayBundle, Dict]:
         """Returns the next batch of data from the eval dataloader."""

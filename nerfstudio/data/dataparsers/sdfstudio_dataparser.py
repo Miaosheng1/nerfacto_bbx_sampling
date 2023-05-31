@@ -165,6 +165,8 @@ class SDFStudioDataParserConfig(DataParserConfig):
     skip_every_for_val_split: int = 1
     """sub sampling validation images"""
     auto_orient: bool = False
+    """opts for adding fisheye"""
+    use_fisheye = False
 
 
 @dataclass
@@ -224,7 +226,7 @@ class SDFStudio(DataParser):
             image_filename = self.config.data / frame["rgb_path"]
 
             intrinsics = torch.tensor(frame["intrinsics"])
-            camtoworld = torch.tensor(frame["camtoworld"])
+            camtoworld = torch.tensor(frame["transform_matrix"])
 
             # append data
             image_filenames.append(image_filename)

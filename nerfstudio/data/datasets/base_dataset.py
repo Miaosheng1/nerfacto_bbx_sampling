@@ -164,6 +164,7 @@ class GeneralizedDataset(InputDataset):
 
         self.all_hw_same = all_hw_same
         self.filenames = self._dataparser_outputs.image_filenames
+        self.dataparser = self._dataparser_outputs
 
     def get_data(self, image_idx: int) -> Dict:
         """Returns the ImageDataset data as a dictionary.

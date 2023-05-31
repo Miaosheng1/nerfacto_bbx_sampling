@@ -114,7 +114,8 @@ class RenderDatasets():
             config.pipeline.model.inference_dataset = "testset"
             if self.is_leaderboard:
                 Test_orderInTrainlist = self.search_Camera_index(trainDataCache.filenames,testDatasetCache.filenames)
-                test_filename = Path('data_leader/test_name/test_{}'.format(str(config.data)[-2:])).with_suffix('.txt')
+                sequece_id = ''.join([x for x in str(config.data) if x.isdigit()])
+                test_filename = Path('data_leader/test_name/test_{}'.format(sequece_id)).with_suffix('.txt')
                 test_file = []
                 with open(test_filename, 'r') as f:
                     lines = f.readlines()
@@ -125,7 +126,8 @@ class RenderDatasets():
 
             else:
                 num_images = len(DataCache.image_cache)
-                Test_orderInTrainlist = [2+i for i in range(num_images)]
+                # Test_orderInTrainlist = [2+i for i in range(num_images)]
+                Test_orderInTrainlist = [4,8,12,14]   ##  在20张的 demo 中，test_id 是[4,9,14,18]
             pipeline.model.field.testset_embedding_index = Test_orderInTrainlist
         else:
             raise print("Task Input is trainset or testset")

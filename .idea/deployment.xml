@@ -2,6 +2,13 @@
 <project version="4">
   <component name="PublishConfigData" autoUpload="Always" serverName="smiao@10.13.74.183:66 password">
     <serverData>
+      <paths name="smiao@10.13.74.166:66 password">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="smiao@10.13.74.183:66 password">
         <serverdata>
           <mappings>
@@ -9,14 +16,7 @@
           </mappings>
         </serverdata>
       </paths>
-      <paths name="smiao@10.13.74.231:66 password">
-        <serverdata>
-          <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
-          </mappings>
-        </serverdata>
-      </paths>
-      <paths name="smiao@10.13.74.231:66 password (1)">
+      <paths name="smiao@10.13.74.183:66 password (1)">
         <serverdata>
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />

@@ -119,7 +119,7 @@ class SpacedSampler(Sampler):
         spacing_to_euclidean_fn = lambda x: self.spacing_fn_inv(x * s_far + (1 - x) * s_near)
         euclidean_bins = spacing_to_euclidean_fn(bins)  # [num_rays, num_samples+1]
 
-        ## 对euclidean_bins 进行修改，使其采样在bbx 之内的点多。
+        ## Coarse 网络上对euclidean_bins 进行修改，使其采样在bbx 之内的点多。
         ## 先把 bbx 的交点通过 spacing_fn 映射到【0,1】 之间，然后对映射回去的区间点采样40个点，这样会造成在【0,1】 之间的并不是uniform 采样，然后
         ## 按照原函数的 编写，和其他点一样 通过 spacing_fn_inv 映射回 Eucler 空间
 

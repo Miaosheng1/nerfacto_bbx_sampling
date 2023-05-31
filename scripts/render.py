@@ -111,7 +111,7 @@ class RenderTrajectory:
     # Name of the renderer outputs to use. rgb, depth, etc. concatenates them along y axis
     rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
     #  Trajectory to render.
-    traj: Literal["spiral", "filename"] = "spiral"
+    traj: Literal["spiral", "filename","roam"] = "spiral"
     # Scaling factor to apply to the camera image resolution.
     downscale_factor: int = 1
     # Filename of the camera path to render.
@@ -162,6 +162,36 @@ class RenderTrajectory:
             camera_to_worlds=new_c2ws[:,:3,:4],
         )
 
+    def render_yaw_roam(self,camera: Cameras):
+        c2w = camera.camera_to_worlds.detach().cpu().numpy()
+        tt = c2w[:3, 3]
+        Rot = c2w[:3, :3]
+        new_poses = []
+        for theta in np.linspace(-0.5 * np.pi, 0.5 * np.pi, 10 + 1)[:-1]:
+            theta = -theta
+            R = np.array([[np.cos(theta), 0, np.sin(theta)],
+                          [0, 1, 0],
+                          [-np.sin(theta), 0, np.cos(theta)]])
+            new_R = np.dot(Rot, R)
+            new_pose = np.eye(4)
+            new_pose[:3, :3] = new_R
+            new_pose[:3, -1] = tt
+            new_poses.append(new_pose)
+        new_poses = np.stack(new_poses).astype(np.float32)
+        new_poses = torch.from_numpy(new_poses)
+        return Cameras(
+            fx=camera.fx[0],
+            fy=camera.fy[0],
+            cx=camera.cx[0],
+            cy=camera.cy[0],
+            height=camera.height,
+            width=camera.width,
+            distortion_params=camera.distortion_params,
+            camera_type=camera.camera_type,
+            camera_to_worlds=new_poses[:, :3, :4],
+        )
+
+
 
     def main(self) -> None:
         """Main function."""
@@ -183,6 +213,11 @@ class RenderTrajectory:
             # TODO(ethan): pass in the up direction of the camera
             # camera_path = get_spiral_path(camera_start, steps=30, radius=0.1)
             camera_path = self.render_sptial_view(cameras, steps=30, radius=0.01)
+        elif self.traj == "roam":
+            camera = pipeline.datamanager.train_dataset.cameras[2]
+            camera_path = self.render_yaw_roam(camera)
+            seconds = 4.0
+            self.output_format = "images"
         elif self.traj == "filename":
             with open(self.camera_path_filename, "r", encoding="utf-8") as f:
                 camera_path = json.load(f)

@@ -224,17 +224,32 @@ class VanillaPipeline(Pipeline):
         self.datamanager: VanillaDataManager = config.datamanager.setup(
             device=device, test_mode=test_mode, world_size=world_size, local_rank=local_rank
         )
+
+        if self.datamanager.config.dataparser.use_fisheye and self.test_mode == "val":
+            self.datamanager.load_fisheye_ray()
+
+
         self.datamanager.to(device)
         # TODO(ethan): get rid of scene_bounds from the model
         assert self.datamanager.train_dataset is not None, "Missing input dataset"
 
-        self._model = config.model.setup(
-            scene_box=self.datamanager.train_dataset.scene_box,
-            num_train_data=len(self.datamanager.train_dataset),
-            metadata=self.datamanager.train_dataset.metadata,
-            world_size=world_size,
-            local_rank=local_rank,
-        )
+        if self.datamanager.train_dataset._dataparser_outputs.fisheye_dict is not None:
+            fisheye_num = self.datamanager.train_dataset._dataparser_outputs.fisheye_dict["imgs"].shape[0]
+            self._model = config.model.setup(
+                scene_box=self.datamanager.train_dataset.scene_box,
+                num_train_data=len(self.datamanager.train_dataset)+fisheye_num,
+                metadata=self.datamanager.train_dataset.metadata,
+                world_size=world_size,
+                local_rank=local_rank,
+            )
+        else:
+            self._model = config.model.setup(
+                scene_box=self.datamanager.train_dataset.scene_box,
+                num_train_data=len(self.datamanager.train_dataset),
+                metadata=self.datamanager.train_dataset.metadata,
+                world_size=world_size,
+                local_rank=local_rank,
+            )
         self.model.to(device)
 
         self.world_size = world_size
@@ -256,6 +271,14 @@ class VanillaPipeline(Pipeline):
         Args:
             step: current iteration step to update sampler if using DDP (distributed)
         """
+
+        ''' Add fisheye'''
+        # if step % 2 == 0:
+        #     ray_bundle, batch = self.datamanager.next_train(step)
+        # else:
+        #     ray_bundle, batch = self.datamanager.next_train_fisheye_shuffle(step)
+
+        ''' Not add fisheye'''
         ray_bundle, batch = self.datamanager.next_train(step)
 
         ## 为ray_bundle 添加bbx test_id train_id 等属性

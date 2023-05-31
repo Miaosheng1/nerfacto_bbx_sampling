@@ -72,6 +72,10 @@ class Field(nn.Module):
             ray_samples: Samples locations to compute density.
         """
 
+    # def get_pos_density(self, positions):
+    #     return Tuple[TensorType[..., 1], TensorType[..., "num_features"]]
+
+
     def get_normals(self) -> TensorType[..., 3]:
         """Computes and returns a tensor of normals.
 

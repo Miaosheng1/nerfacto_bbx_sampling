@@ -637,7 +637,7 @@ class Cameras(TensorDataclass):
             mask = torch.stack([mask, mask, mask], dim=0)
 
             theta = torch.sqrt(torch.sum(coord_stack**2, dim=-1))
-            theta = torch.clip(theta, 0.0, math.pi)
+            theta = torch.clip(theta, 0.0, math.pi) ## 假设相机的 Fov 是180°，因此这里是pi
 
             sin_theta = torch.sin(theta)
 
