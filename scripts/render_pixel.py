@@ -35,6 +35,7 @@ import cv2
 
 CONSOLE = Console(width=120)
 
+"""可视化 单挑光线 在Bbx 内的采样"""
 class RenderDatasets():
     """Load a checkpoint, render the trainset and testset rgb,normal,depth, and save to the picture"""
     def __init__(self,parser_path):
@@ -155,21 +156,20 @@ class RenderDatasets():
         render_normal = []
 
         ## Debug 的特定区域的代码. 像素坐标系（y,x）
-        debug_img_idx = 14
-        # p_x = np.array([100, 450, 560, 680, 650, 1010,505,530])
-        # p_y = np.array([100,120,240,200,300,200,195,200])
-        p_x = np.array([100, 450, 560, 1020, 650,150])
-        p_y = np.array([300, 260, 260, 200, 50,280])
+        debug_img_idx = 0
+
+        p_x = np.array([1300, 600,1200])  ## 注意 pixel_x 的范围是 [0,1450]
+        p_y = np.array([300, 150,300])     ## 注意 pixel_y 的范围是 [0,374]
         draw_image = DataCache.image_cache[debug_img_idx].detach().cpu().numpy() * 255.0
         p = np.stack([p_x, p_y], axis=-1)
         for point in p:
             cv2.circle(draw_image, point, radius=5, color=(0, 0, 255), thickness=4)
-        cv2.imwrite(os.path.join("./", "draw_point.png"), draw_image)
+        cv2.imwrite(os.path.join("./", "draw_point.png"), draw_image[...,[2,1,0]])
 
         p_x = torch.from_numpy(p_x).to('cuda')
         p_y = torch.from_numpy(p_y).to('cuda')
         with progress:
-            camera_idx = 14
+            camera_idx = debug_img_idx
             camera_ray_bundle = cameras.generate_rays(camera_indices=camera_idx)
             with torch.no_grad():
                 # outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)

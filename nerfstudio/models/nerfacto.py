@@ -57,7 +57,9 @@ from nerfstudio.model_components.scene_colliders import NearFarCollider
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
 from nerfstudio.utils.colors import get_color
-
+from scipy.interpolate import RegularGridInterpolator
+import torch.nn.functional as F
+from nerfstudio.model_components.ray_samplers import PDFSampler, UniformSampler,UniformLinDispPiecewiseSampler
 
 @dataclass
 class NerfactoModelConfig(ModelConfig):
@@ -104,6 +106,9 @@ class NerfactoModelConfig(ModelConfig):
     orientation_loss_mult: float = 0.0001
     """Orientation loss multipier on computed noramls."""
     pred_normal_loss_mult: float = 0.001
+    alpha_loss_mult: float = 1.0
+    voxformer_coff: float = 0.5
+    """Voxformer Coefficient init is 0.5"""
     """Predicted normal loss multiplier."""
     use_proposal_weight_anneal: bool = True
     """Whether to use proposal weight annealing."""
@@ -123,6 +128,7 @@ class NerfactoModelConfig(ModelConfig):
     """When in inference, which dataset will be loaded."""
 
 
+
 class NerfactoModel(Model):
     """Nerfacto model
 
@@ -132,7 +138,7 @@ class NerfactoModel(Model):
 
     config: NerfactoModelConfig
 
-    def populate_modules(self):
+    def populate_modules(self,voxformer_occupancy=None):
         """Set the fields and modules."""
         super().populate_modules()
 
@@ -151,6 +157,14 @@ class NerfactoModel(Model):
             use_individual_appearance_embedding=self.config.use_individual_appearance_embedding,
             inference_dataset = self.config.inference_dataset
         )
+
+
+        self.voxformer_occupancy = voxformer_occupancy
+        self.Cam2Velo = [
+            [0.04307104, -0.08829286, 0.99516293, 0.80439144],
+            [-0.99900437, 0.00778461, 0.04392797, 0.29934896],
+            [-0.01162549, -0.99606414, -0.08786967, -0.17702258],
+        ]
 
         self.density_fns = []
         num_prop_nets = self.config.num_proposal_iterations
@@ -173,6 +187,9 @@ class NerfactoModel(Model):
                 self.proposal_networks.append(network)
             self.density_fns.extend([network.density_fn for network in self.proposal_networks])
 
+            ## 为voxformer 添加一个可以输出 负值的 density
+            self.neg_density_fn = network.get_neg_alpha
+
         # Samplers
         update_schedule = lambda step: np.clip(
             np.interp(step, [0, self.config.proposal_warmup], [0, self.config.proposal_update_every]),
@@ -186,6 +203,11 @@ class NerfactoModel(Model):
             single_jitter=self.config.use_single_jitter,
             update_sched=update_schedule,
         )
+
+        ## PDF sampler used in NeRF
+        self.initial_sampler = UniformLinDispPiecewiseSampler(single_jitter=False)
+        self.sampler_pdf = PDFSampler(include_original=False, single_jitter=False,num_samples=128)
+
 
         # Collider
         self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
@@ -211,6 +233,8 @@ class NerfactoModel(Model):
 
         ## filename_index
         self.img_filename = None
+
+        self.voxformer_step = 0
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
@@ -250,9 +274,36 @@ class NerfactoModel(Model):
         return callbacks
 
     def get_outputs(self, ray_bundle: RayBundle):
-        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
-        field_outputs = self.field(ray_samples, compute_normals=self.config.predict_normals)
-        weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
+        if self.voxformer_occupancy is not None:
+            """ Nerfacto 的 Proposal Network 采样"""
+            ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle,
+                                                                                density_fns=self.density_fns,
+                                                                                voxformer_fn=self.get_occupancy_with_voxformer,
+                                                                                # neg_alpha_fn = self.neg_density_fn,
+                                                                                )
+            field_outputs = self.field(ray_samples, compute_normals=self.config.predict_normals)
+            voxformer_alpha = self.get_occupancy_with_voxformer(ray_samples.frustums.get_positions())
+            # neg_alpha = self.neg_density_fn(ray_samples)
+            weights,alphas_dict = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY] , voxformer_alpha = voxformer_alpha,neg_alpha=None)
+            # weights, alphas_dict = ray_samples.get_weights(torch.zeros_like(voxformer_alpha),
+            #                                                voxformer_alpha=voxformer_alpha)
+            t = (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2
+
+            if ray_samples.shape[0] < 5:
+                print("Debug Fixed Ray")
+                from pathlib import Path
+                np.save( Path("piexl_alphas.npy"), alphas_dict.get('alphas').detach().cpu().numpy())
+                np.save( Path("piexl_weight.npy"), weights.detach().cpu().numpy())
+                np.save( Path("pixel_t.npy"), t.detach().cpu().numpy())
+                exit()
+
+        else:
+            ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
+            field_outputs = self.field(ray_samples, compute_normals=self.config.predict_normals)
+            weights,alphas_dict = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
+
+            t = (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2
+
         weights_list.append(weights)
         ray_samples_list.append(ray_samples)
 
@@ -265,6 +316,13 @@ class NerfactoModel(Model):
             "accumulation": accumulation,
             "depth": depth,
             "weight":weights,
+            "density":field_outputs[FieldHeadNames.DENSITY],
+            "alphas":alphas_dict.get('alphas'),
+            "voxformer_alpha":alphas_dict.get('voxformer_alpha'),
+            "orign_alpha":alphas_dict.get('orign_alpha'),
+            "t":t,
+            # "neg_alpha":neg_alpha
+            "alpha_loss":alphas_dict.get('alpha_loss'),
         }
 
         if self.config.predict_normals:
@@ -291,6 +349,7 @@ class NerfactoModel(Model):
             outputs[f"prop_depth_{i}"] = self.renderer_depth(weights=weights_list[i], ray_samples=ray_samples_list[i])
 
         return outputs
+
 
     def get_metrics_dict(self, outputs, batch):
         metrics_dict = {}
@@ -320,6 +379,8 @@ class NerfactoModel(Model):
                 loss_dict["pred_normal_loss"] = self.config.pred_normal_loss_mult * torch.mean(
                     outputs["rendered_pred_normal_loss"]
                 )
+            if self.voxformer_occupancy is not None:
+                loss_dict["alpha_loss"] =  self.config.alpha_loss_mult * outputs['alpha_loss']
         return loss_dict
 
     def get_image_metrics_and_images(
@@ -368,3 +429,53 @@ class NerfactoModel(Model):
             images_dict[key] = prop_depth_i
 
         return metrics_dict, images_dict
+
+    def get_occupancy_with_voxformer(
+            self,
+            positions = None,
+    ):
+        self.voxformer_step += 1
+        scale = self.voxformer_occupancy["scale_factor"]
+        diff_translation = self.voxformer_occupancy["diff_mean_poses"].to('cuda')
+        voxformer_occupancy = self.voxformer_occupancy["voxformer_occupancy"]
+
+        shape = positions.shape[:2]
+        ## 将camera 系的 coor 转到 lidar 系，去查询 occupancy
+        positions = positions/scale + diff_translation  ## 转到Cam1 坐标系
+        positions = positions.detach().cpu().numpy().reshape(-1,3)
+        positions = np.hstack((positions, np.ones((positions.shape[0], 1))))
+        positions = np.dot(positions, np.transpose(self.Cam2Velo))
+
+        """ 根据采样点的 position 去查询 voxformer 的 occupancy 初始值"""
+        Occupancy = np.clip(voxformer_occupancy[..., -1], 0, 1)
+        x_range = (0, 51.2)
+        y_range = (-25.6, 25.6)
+        z_range = (-2, 4.4)
+
+        x = np.linspace(x_range[0], x_range[1], 256 + 1)[:-1] + 0.1
+        y = np.linspace(y_range[0], y_range[1], 256 + 1)[:-1] + 0.1
+        z = np.linspace(z_range[0], z_range[1], 32 + 1)[:-1] + 0.1
+
+        ## Torch 实现
+        voxformer_volume = Occupancy.transpose(2, 1, 0)
+        voxformer_volume = torch.from_numpy(voxformer_volume)[None, None, ...].double()
+        # positions = torch.from_numpy(pos)  相对于 padding_mode = border
+        positions = torch.from_numpy(positions).to(self.device)
+        x_normalized = 2 * (positions[..., 0] - x[0]) / (x[-1] - x[0]) - 1
+        y_normalized = positions[..., 1] / y[-1]
+        z_normalized = 2 * (positions[..., 2] - z[0]) / (z[-1] - z[0]) - 1
+        grid = torch.stack([x_normalized, y_normalized, z_normalized], dim=-1).double()
+        interpolated_values = F.grid_sample(voxformer_volume.to(self.device), grid[None, None, None, ...], mode='bilinear',
+                                            align_corners=True,padding_mode='zeros').float()
+
+        voxformer_coff = self.config.voxformer_coff
+        return interpolated_values.view(*shape,-1) * voxformer_coff
+
+    # def coff_anneal(self):
+    #     fina_step = 10000
+    #     if self.voxformer_step < fina_step:
+    #         coff = 1 / -fina_step * self.voxformer_step + 1
+    #     else:
+    #         coff = 0
+    #     return coff
+

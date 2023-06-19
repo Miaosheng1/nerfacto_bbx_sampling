@@ -151,8 +151,6 @@ class SDFFieldConfig(FieldConfig):
     beta_init: float = 0.1
     """Init learnable beta value for transformation of sdf to density"""
     encoding_type: Literal["hash", "periodic", "tensorf_vm"] = "hash"
-    """Init Occupancy field"""
-    occupancy_initial: bool = False
 
 
 class SDFField(Field):
@@ -185,7 +183,6 @@ class SDFField(Field):
         self.use_average_appearance_embedding = use_average_appearance_embedding
         self.use_grid_feature = self.config.use_grid_feature
         self.divide_factor = self.config.divide_factor
-        self.voxformer_occupancy_filed = None
 
         num_levels = 16
         max_res = 2048
@@ -528,8 +525,7 @@ class SDFField(Field):
             outputs.update({FieldHeadNames.ALPHA: alphas})
 
         if return_occupancy:
-
-            occupancy = self.get_occupancy(sdf)   ## 将这里的 occupancy_filed 进行修改
+            occupancy = self.get_occupancy(sdf)
             outputs.update({FieldHeadNames.OCCUPANCY: occupancy})
 
         return outputs

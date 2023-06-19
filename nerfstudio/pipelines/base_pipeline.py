@@ -249,7 +249,10 @@ class VanillaPipeline(Pipeline):
                 metadata=self.datamanager.train_dataset.metadata,
                 world_size=world_size,
                 local_rank=local_rank,
+                voxformer_occupancy = self.datamanager.train_dataset._dataparser_outputs.voxformer_occupancy
             )
+
+
         self.model.to(device)
 
         self.world_size = world_size

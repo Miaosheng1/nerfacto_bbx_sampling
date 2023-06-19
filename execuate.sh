@@ -24,3 +24,10 @@ python scripts/extract_mesh.py --load-config outputs/datasets-kitti360_nerfacto_
 
 ## run voxformer & unisurf
 python scripts/train.py unisurf --pipeline.model.sdf-field.inside-outside False --vis tensorboard sdfstudio-data --data datasets/kitti360_neus/
+
+
+## run voxformer & nerfacto
+python scripts/train.py  nerfacto --pipeline.datamanager.camera-optimizer.mode off --vis tensorboard
+  --trainer.max-num-iterations 20000 --data /data/smiao/datasets/kitti360_nerfacto_3353_50/
+
+python scripts/only_inference.py --config  outputs/-data-smiao-datasets-kitti360_nerfacto_3353_50/nerfacto/2023-06-02_181503/config.yml --task testset

@@ -132,9 +132,9 @@ class Vis():
 
         for i in range(pts.shape[0]):
             self.fig.add_trace(
-                go.Scatter3d(x=pts[i, 0:-10:2, 0],
-                             y=pts[i, 0:-10:2, 1],
-                             z=pts[i, 0:-10:2, 2],
+                go.Scatter3d(x=pts[i, 0:-2:1, 0],
+                             y=pts[i, 0:-2:1, 1],
+                             z=pts[i, 0:-2:1, 2],
                              mode='markers+lines',
                              name=f"Ray_{i}",
                              marker=dict(size=2),

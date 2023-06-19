@@ -81,8 +81,9 @@ class Model(nn.Module):
         self.collider = None
         self.world_size = world_size
         self.local_rank = local_rank
+        voxformer_occupancy = kwargs.get("voxformer_occupancy",None)
 
-        self.populate_modules()  # populate the modules
+        self.populate_modules(voxformer_occupancy=voxformer_occupancy)  # populate the modules
         self.callbacks = None
         # to keep track of which device the nn.Module is on
         self.device_indicator_param = nn.Parameter(torch.empty(0))
@@ -188,6 +189,8 @@ class Model(nn.Module):
 
             outputs = self.forward(ray_bundle=ray_bundle)
             for output_name, output in outputs.items():  # type: ignore
+                if output_name == "alpha_loss":
+                    continue
                 outputs_lists[output_name].append(output)
         outputs = {}
         for output_name, outputs_list in outputs_lists.items():

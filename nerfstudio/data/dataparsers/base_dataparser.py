@@ -75,6 +75,7 @@ class DataparserOutputs:
     Will be processed by the InputDataset to create any additional tensors that may be required.
     """
     fisheye_dict = None
+    voxformer_occupancy: Optional = None
 
 
     def as_dict(self) -> dict:

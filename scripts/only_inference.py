@@ -54,6 +54,7 @@ class RenderDatasets():
         self.task = parser_path.task
         self.is_leaderboard = parser_path.is_leaderboard
         self.ssim = structural_similarity
+        self.visualize_ray = parser_path.visualize_ray
 
     def generate_errorMap(self,ssim,index):
         ssim = np.mean(ssim,axis=-1).clip(0,1)
@@ -126,8 +127,8 @@ class RenderDatasets():
 
             else:
                 num_images = len(DataCache.image_cache)
-                # Test_orderInTrainlist = [2+i for i in range(num_images)]
-                Test_orderInTrainlist = [4,8,12,14]   ##  在20张的 demo 中，test_id 是[4,9,14,18]
+                Test_orderInTrainlist = [2+i for i in range(num_images)]
+                # Test_orderInTrainlist = [4,8,12,14]   ##  在20张的 demo 中，test_id 是[4,9,14,18]
             pipeline.model.field.testset_embedding_index = Test_orderInTrainlist
         else:
             raise print("Task Input is trainset or testset")
@@ -169,6 +170,22 @@ class RenderDatasets():
                         CONSOLE.print(f"Please set --rendered_output_name to one of: {outputs.keys()}",
                                       justify="center")
                         sys.exit(1)
+                    "Debug Ray"
+                    if self.visualize_ray:
+                        # np.save(self.root_dir/Path("img0_density.npy"),outputs['density'].detach().cpu().numpy())
+                        np.save(self.root_dir / Path("img0_weight.npy"), outputs['weight'].detach().cpu().numpy())
+                        np.save(self.root_dir / Path("img0_rgb.npy"), outputs['rgb'].detach().cpu().numpy())
+                        np.save(str(self.root_dir / Path("img0_depth.npy")), outputs['depth'].detach().cpu().numpy())
+                        np.save(self.root_dir / Path("img0_alphas.npy"), outputs['alphas'].detach().cpu().numpy())
+                        if "voxformer_alpha" in outputs:
+                            np.save(self.root_dir / Path("img0_origin_alpha.npy"), outputs['orign_alpha'].detach().cpu().numpy())
+                            np.save(self.root_dir / Path("img0_voxformer_alpha.npy"), outputs['voxformer_alpha'].detach().cpu().numpy())
+                            # np.save(self.root_dir / Path("neg_alpha.npy"), outputs['neg_alpha'].detach().cpu().numpy())
+                        np.save(self.root_dir / Path("img0_t.npy"),outputs['t'].detach().cpu().numpy())
+
+
+                        print("Debug Ray Param Saved!")
+                        exit()
                     output_image = outputs[rendered_output_name].cpu().numpy()
                     if rendered_output_name == 'rgb':
                         render_image.append(output_image)
@@ -179,6 +196,23 @@ class RenderDatasets():
         CONSOLE.print("[bold green]Rendering Images Finished")
 
         ''' Output rgb depth and normal image'''
+        for i in range(len(render_depth)):
+            pred_depth = render_depth[i].squeeze(2)
+            pred_depth = pred_depth.clip(0, 20)
+            print(f"Predecited Depth Max:{pred_depth.max()}  clip max = 20 ")
+            plt.close('all')
+            ax = plt.subplot()
+            sc = ax.imshow((pred_depth), cmap='jet')
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            plt.colorbar(sc, cax=cax)
+            plt.savefig(os.path.join(str(self.root_dir) + f'/{self.task}_{i:02d}_depth.png'))
+            # pred_depth = cv2.applyColorMap(cv2.convertScaleAbs(((pred_depth / pred_depth.max()) * 255).astype(np.uint8), alpha=2), cv2.COLORMAP_JET)
+            # cv2.imwrite(str(self.root_dir)+f'/{self.task}_{i:02d}_depth.png',pred_depth)
+            if "normal" in self.rendered_output_names:
+                media.write_image(self.root_dir / f'{self.task}_{i:02d}_normal.png', render_normal[i])
+
+
         sum_psnr = 0
         for i,image in sorted(DataCache.image_cache.items()):
             if self.is_leaderboard and self.task == 'testset':
@@ -205,21 +239,7 @@ class RenderDatasets():
 
         print(f"Average PSNR:{sum_psnr/len(DataCache.image_cache)}")
 
-        for i in range(len(render_depth)):
-            pred_depth = render_depth[i].squeeze(2)
-            pred_depth = pred_depth.clip(0,20)
-            print(f"Predecited Depth Max:{pred_depth.max()}  clip max = 20 ")
-            plt.close('all')
-            ax = plt.subplot()
-            sc = ax.imshow((pred_depth), cmap='jet')
-            divider = make_axes_locatable(ax)
-            cax = divider.append_axes("right", size="5%", pad=0.05)
-            plt.colorbar(sc, cax=cax)
-            plt.savefig(os.path.join(str(self.root_dir)+f'/{self.task}_{i:02d}_depth.png'))
-            # pred_depth = cv2.applyColorMap(cv2.convertScaleAbs(((pred_depth / pred_depth.max()) * 255).astype(np.uint8), alpha=2), cv2.COLORMAP_JET)
-            # cv2.imwrite(str(self.root_dir)+f'/{self.task}_{i:02d}_depth.png',pred_depth)
-            if "normal" in self.rendered_output_names:
-                media.write_image(self.root_dir/f'{self.task}_{i:02d}_normal.png', render_normal[i])
+
         CONSOLE.print(f"[bold blue] Store image to {self.root_dir}")
 
 
@@ -229,6 +249,7 @@ if __name__ == "__main__":
     parser.add_argument('--task', type=str, help='testset or trainset')
     parser.add_argument('--config',type=str,help='Config Path')
     parser.add_argument('--is_leaderboard',action='store_true')
+    parser.add_argument("--visualize_ray",action='store_true')
     config = parser.parse_args()
 
     RenderDatasets(config).main()

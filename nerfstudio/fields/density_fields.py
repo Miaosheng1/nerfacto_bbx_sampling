@@ -92,9 +92,21 @@ class HashMLPDensityField(Field):
                 encoding_config=config["encoding"],
                 network_config=config["network"],
             )
+
+            # self.mlp_neg_alpha = tcnn.NetworkWithInputEncoding(
+            #     n_input_dims=3,
+            #     n_output_dims=1,
+            #     encoding_config=config["encoding"],
+            #     network_config=config["network"],
+            # )
+            self.tanh = torch.nn.Tanh()
+            self.sigmoid = torch.nn.Sigmoid()
         else:
             self.encoding = tcnn.Encoding(n_input_dims=3, encoding_config=config["encoding"])
             self.linear = torch.nn.Linear(self.encoding.n_output_dims, 1)
+
+        # self.encoding = tcnn.Encoding(n_input_dims=3, encoding_config=config["encoding"])
+        # self.linear = torch.nn.Linear(self.encoding.n_output_dims, 1)
 
     def get_density(self, ray_samples: RaySamples):
         if self.spatial_distortion is not None:
@@ -116,7 +128,25 @@ class HashMLPDensityField(Field):
         # softplus, because it enables high post-activation (float32) density outputs
         # from smaller internal (float16) parameters.
         density = trunc_exp(density_before_activation)
+
         return density, None
 
     def get_outputs(self, ray_samples: RaySamples, density_embedding: Optional[TensorType] = None):
         return {}
+
+    def get_neg_alpha(self,ray_samples: RaySamples):
+        if self.spatial_distortion is not None:
+            positions = ray_samples.frustums.get_positions()
+            positions = self.spatial_distortion(positions)  ## 经过mipnerf360 的 contract 之后，bounded 在【-2,2】范围之内
+            positions = (positions + 2.0) / 4.0   ## bound to [0,1]
+        else:
+            positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
+        positions_flat = positions.view(-1, 3)
+
+        alpha_neg = (
+            self.mlp_neg_alpha(positions_flat).view(*ray_samples.frustums.shape, -1).to(positions)
+        )
+        # res = -1 * self.sigmoid(alpha_neg)
+
+        return trunc_exp(alpha_neg)
+
