@@ -90,21 +90,11 @@ class UniSurfModel(SurfaceModel):
         )
         return callbacks
 
-
-    def get_occupancy_with_voxformer(self,sdf,ray_samples: RaySamples):
-        occupancy_unisurf = self.sigmoid(-10.0 * sdf)
-        positions = ray_samples.frustums.get_start_positions()
-        """ 根据采样点的 position 去查询 voxformer 的 occupancy 初始值"""
-
-        return occupancy_unisurf
-
     def sample_and_forward_field(self, ray_bundle: RayBundle) -> Dict:
         ray_samples, surface_points = self.sampler(
             ray_bundle, occupancy_fn=self.field.get_occupancy, sdf_fn=self.field.get_sdf, return_surface_points=True
         )
         field_outputs = self.field(ray_samples, return_occupancy=True)
-
-        "在这里修正一下，将 voxformer 的 occupancy filed 引入"
         weights, transmittance = ray_samples.get_weights_and_transmittance_from_alphas(
             field_outputs[FieldHeadNames.OCCUPANCY]
         )

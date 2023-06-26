@@ -128,7 +128,7 @@ class RaySamples(TensorDataclass):
     times: Optional[TensorType[..., 1]] = None
     """Times at which rays are sampled"""
 
-    def get_weights(self, densities: TensorType[..., "num_samples", 1],voxformer_alpha=None ,neg_alpha =None) -> TensorType[..., "num_samples", 1]:
+    def get_weights(self, densities: TensorType[..., "num_samples", 1]) -> TensorType[..., "num_samples", 1]:
         """Return weights based on predicted densities
 
         Args:
@@ -140,32 +140,16 @@ class RaySamples(TensorDataclass):
 
         delta_density = self.deltas * densities
         alphas = 1 - torch.exp(-delta_density)
-        orign_alpha = alphas
-        alpha_loss = 0
-        ## add voxfomer alpha density
-        if voxformer_alpha is not None:
-            # Mask = (voxformer_alpha > 0.5).int() ## 求出相交的 Ray;若相交 Mask =1; 否则 Mask = 0
-            # neg_alpha = -(1 - torch.exp(-self.deltas * neg_alpha))
-            # alphas = torch.clamp((1-Mask) * alphas + voxformer_alpha + Mask * neg_alpha,min=0,max=1)
-            alphas = torch.clamp((alphas + voxformer_alpha) ,min=0, max=1)
-            # with torch.no_grad():
-            occupancy_index_in_pts = torch.argmax(voxformer_alpha, dim=1)
-            mask = torch.arange(voxformer_alpha.shape[1]).unsqueeze(0).to("cuda") > occupancy_index_in_pts - 1
-            mask = ~mask
-            # alpha_loss = torch.mean(mask.unsqueeze(-1) * densities)
 
-
-
-
-        Transmittance = torch.cumprod(
-            torch.cat([torch.ones((*alphas.shape[:1], 1, 1), device=alphas.device), 1.0 - alphas + 1e-7], 1), 1
+        transmittance = torch.cumsum(delta_density[..., :-1, :], dim=-2)
+        transmittance = torch.cat(
+            [torch.zeros((*transmittance.shape[:1], 1, 1), device=densities.device), transmittance], dim=-2
         )
-        Transmittance = Transmittance[:, :-1, :]
+        transmittance = torch.exp(-transmittance)  # [..., "num_samples"]
 
-        weights = alphas * Transmittance  # [..., "num_samples"]
+        weights = alphas * transmittance  # [..., "num_samples"]
 
-        alpha_dict = {"alphas":alphas,"voxformer_alpha":voxformer_alpha,"orign_alpha":orign_alpha ,"alpha_loss":alpha_loss}
-        return weights,alpha_dict
+        return weights
 
     def get_weights_and_transmittance(
         self, densities: TensorType[..., "num_samples", 1]

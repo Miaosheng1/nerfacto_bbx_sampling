@@ -249,10 +249,7 @@ class VanillaPipeline(Pipeline):
                 metadata=self.datamanager.train_dataset.metadata,
                 world_size=world_size,
                 local_rank=local_rank,
-                voxformer_occupancy = self.datamanager.train_dataset._dataparser_outputs.voxformer_occupancy
             )
-
-
         self.model.to(device)
 
         self.world_size = world_size
@@ -276,13 +273,14 @@ class VanillaPipeline(Pipeline):
         """
 
         ''' Add fisheye'''
-        # if step % 2 == 0:
-        #     ray_bundle, batch = self.datamanager.next_train(step)
-        # else:
-        #     ray_bundle, batch = self.datamanager.next_train_fisheye_shuffle(step)
+        if step % 2 == 0:
+            ray_bundle, batch = self.datamanager.next_train(step)
+        else:
+            # ray_bundle, batch = self.datamanager.next_train_fisheye(step)
+            ray_bundle, batch = self.datamanager.next_train_fisheye_shuffle(step)
 
         ''' Not add fisheye'''
-        ray_bundle, batch = self.datamanager.next_train(step)
+        # ray_bundle, batch = self.datamanager.next_train(step)
 
         ## 为ray_bundle 添加bbx test_id train_id 等属性
         ray_bundle.bbx = self.datamanager.train_dataset.cameras.bbx

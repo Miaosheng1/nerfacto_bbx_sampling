@@ -67,9 +67,7 @@ class NerfstudioDataParserConfig(DataParserConfig):
     """The percent of images to use for training. The remaining images are for eval."""
     annotation_3d = None
     """use fisheye """
-    use_fisheye = False
-    """ Whether to use voxformer Occupancy filed"""
-    include_voxformer_occupancy = True
+    use_fisheye = True
 
 
 @dataclass
@@ -321,32 +319,15 @@ class Nerfstudio(DataParser):
         assert self.downscale_factor is not None
         cameras.rescale_output_resolution(scaling_factor=1.0 / self.downscale_factor)
 
-        if self.config.include_voxformer_occupancy:
-            voxformer_occupancy = np.load(self.config.data / "kitt_3353_occupancy.npy")
-            voxformer_dict = {
-                            "voxformer_occupancy":voxformer_occupancy,
-                              "scale_factor":scale_factor,
-                              "diff_mean_poses":diff_mean_poses
-                              }
-            # cam_location = poses[:,:3,3] /scale_factor + diff_mean_poses
-            # np.save("cam_location.npy",cam_location.detach().cpu().numpy())
-            # exit()
-        else:
-            voxformer_dict = None
-
         dataparser_outputs = DataparserOutputs(
             image_filenames=image_filenames,
             cameras=cameras,
             scene_box=scene_box,
             mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
-            voxformer_occupancy = voxformer_dict
-
         )
 
-
-
         ## add fisheye param  如果要加 fisheye 记得在json 文件里 加上use_fisheye 的选项
-        if self.config.use_fisheye :
+        if self.config.use_fisheye and 'use_fisheye' in meta:
             fisheye_poses, fisheye_imgs, fisheye_meta,mask = self.load_fish_eye_param(diff_mean_poses=diff_mean_poses, scale_factor=scale_factor,config_data=self.config.data)
             fisheye_dict = {
                 'pose':fisheye_poses,

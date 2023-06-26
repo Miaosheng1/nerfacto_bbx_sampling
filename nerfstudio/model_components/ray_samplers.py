@@ -820,8 +820,6 @@ class ProposalNetworkSampler(Sampler):
         self,
         ray_bundle: Optional[RayBundle] = None,
         density_fns: Optional[List[Callable]] = None,
-        voxformer_fn:Optional[List[Callable]] = None,
-        neg_alpha_fn:Optional[List[Callable]] = None,
     ) -> Tuple[RaySamples, List, List]:
         assert ray_bundle is not None
         assert density_fns is not None
@@ -848,21 +846,12 @@ class ProposalNetworkSampler(Sampler):
             if is_prop:
                 if updated:
                     # always update on the first step or the inf check in grad scaling crashes
-                    posit = ray_samples.frustums.get_positions() ## world Coordinates
+                    posit = ray_samples.frustums.get_positions()
                     density = density_fns[i_level](posit)
                 else:
                     with torch.no_grad():
                         density = density_fns[i_level](ray_samples.frustums.get_positions())
-
-                """ 修改的部分"""
-                if voxformer_fn is not None:
-                    # neg_alpha = neg_alpha_fn(ray_samples)
-                    neg_alpha = None
-                    weights,_ = ray_samples.get_weights(density,voxformer_alpha=voxformer_fn(ray_samples.frustums.get_positions()),neg_alpha = neg_alpha)
-                else:
-                    weights,_ = ray_samples.get_weights(density)
-
-
+                weights = ray_samples.get_weights(density)
                 weights_list.append(weights)  # (num_rays, num_samples)
                 ray_samples_list.append(ray_samples)
         if updated:
@@ -882,10 +871,7 @@ class ProposalNetworkSampler(Sampler):
         #     current_bbx = ray_bundle.bbx[current_image_index // 2]
 
         # vis.draw_bbx(current_bbx.detach().cpu().numpy())
-
-        # vis.draw_all_ray(pts[:,:-1,:],output_name="vis_pointwise.html")
-        # print("Vis 3D sampling points finished!")
-        # exit()
+        # vis.draw_all_ray(pts[:,:-1,:],output_name="after_process.html")
 
 
         return ray_samples, weights_list, ray_samples_list

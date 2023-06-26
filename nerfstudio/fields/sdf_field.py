@@ -428,7 +428,6 @@ class SDFField(Field):
         occupancy = self.sigmoid(-10.0 * sdf)
         return occupancy
 
-
     def get_colors(self, points, directions, normals, geo_features, camera_indices):
         """compute colors"""
         d = self.direction_encoding(directions)
