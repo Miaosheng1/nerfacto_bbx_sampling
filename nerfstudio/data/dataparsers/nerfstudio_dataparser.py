@@ -67,7 +67,7 @@ class NerfstudioDataParserConfig(DataParserConfig):
     """The percent of images to use for training. The remaining images are for eval."""
     annotation_3d = None
     """use fisheye """
-    use_fisheye = True
+    use_fisheye: bool = True
 
 
 @dataclass

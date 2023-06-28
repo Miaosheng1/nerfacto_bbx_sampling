@@ -208,6 +208,8 @@ class Config(PrintableConfig):
     """Method name. Required to set in python or via cli"""
     experiment_name: Optional[str] = None
     """Experiment name. If None, will automatically be set to dataset name"""
+    descriptor: Optional[str] = None
+    """Descrupte Debug method"""
     timestamp: str = "{timestamp}"
     """Experiment timestamp."""
     machine: MachineConfig = MachineConfig()
@@ -261,7 +263,8 @@ class Config(PrintableConfig):
         # check the experiment and method names
         assert self.method_name is not None, "Please set method name in config or via the cli"
         self.set_experiment_name()
-        return Path(f"{self.output_dir}/{self.experiment_name}/{self.method_name}/{self.timestamp}")
+        return Path(f"{self.output_dir}/{self.experiment_name}/{self.method_name}/{self.descriptor}")
+        # return Path(f"{self.output_dir}/{self.experiment_name}/{self.method_name}/{self.timestamp}")
 
     def get_checkpoint_dir(self) -> Path:
         """Retrieve the checkpoint directory"""

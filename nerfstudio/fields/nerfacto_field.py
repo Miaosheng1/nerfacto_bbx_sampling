@@ -109,6 +109,7 @@ class TCNNNerfactoField(Field):
         use_individual_appearance_embedding:bool = False,
         inference_dataset = "off",
         spatial_distortion: Optional[SpatialDistortion] = None,
+        feature_per_level = 2,
     ) -> None:
         super().__init__()
 
@@ -126,9 +127,10 @@ class TCNNNerfactoField(Field):
         self.use_pred_normals = use_pred_normals
         self.inference_dataset = inference_dataset
         self.testset_embedding_index = []
+        self.features_per_level = feature_per_level
 
         base_res = 16
-        features_per_level = 2
+        # features_per_level
         growth_factor = np.exp((np.log(max_res) - np.log(base_res)) / (num_levels - 1))
 
         self.direction_encoding = tcnn.Encoding(
@@ -150,7 +152,7 @@ class TCNNNerfactoField(Field):
             encoding_config={
                 "otype": "HashGrid",
                 "n_levels": num_levels,
-                "n_features_per_level": features_per_level,
+                "n_features_per_level": self.features_per_level,
                 "log2_hashmap_size": log2_hashmap_size,
                 "base_resolution": base_res,
                 "per_level_scale": growth_factor,

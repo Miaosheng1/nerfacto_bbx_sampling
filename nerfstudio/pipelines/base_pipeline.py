@@ -272,15 +272,16 @@ class VanillaPipeline(Pipeline):
             step: current iteration step to update sampler if using DDP (distributed)
         """
 
-        ''' Add fisheye'''
-        if step % 2 == 0:
-            ray_bundle, batch = self.datamanager.next_train(step)
+        ''' Add fisheye. fisheye combine perspective camera'''
+        if self.config.datamanager.dataparser.use_fisheye:
+            if step % 2 == 0:
+                ray_bundle, batch = self.datamanager.next_train(step)
+            else:
+                ray_bundle, batch = self.datamanager.next_train_fisheye_shuffle(step)
+            # ray_bundle, batch = self.datamanager.next_train_fisheye_shuffle(step)
         else:
-            # ray_bundle, batch = self.datamanager.next_train_fisheye(step)
-            ray_bundle, batch = self.datamanager.next_train_fisheye_shuffle(step)
-
-        ''' Not add fisheye'''
-        # ray_bundle, batch = self.datamanager.next_train(step)
+            ''' Not add fisheye, Only perspective camera'''
+            ray_bundle, batch = self.datamanager.next_train(step)
 
         ## 为ray_bundle 添加bbx test_id train_id 等属性
         ray_bundle.bbx = self.datamanager.train_dataset.cameras.bbx

@@ -75,6 +75,7 @@ class NerfactoModelConfig(ModelConfig):
     max_res: int = 1024
     """Maximum resolution of the hashmap for the base mlp."""
     log2_hashmap_size: int = 19
+    feature_per_level: int = 2
     """Size of the hashmap for the base mlp"""
     num_proposal_samples_per_ray: Tuple[int] = (256, 96)
     """Number of samples per ray for the proposal network."""
@@ -149,7 +150,8 @@ class NerfactoModel(Model):
             use_pred_normals=self.config.predict_normals,
             use_average_appearance_embedding=self.config.use_average_appearance_embedding,
             use_individual_appearance_embedding=self.config.use_individual_appearance_embedding,
-            inference_dataset = self.config.inference_dataset
+            inference_dataset = self.config.inference_dataset,
+            feature_per_level = self.config.feature_per_level
         )
 
         self.density_fns = []
