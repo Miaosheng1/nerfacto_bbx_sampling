@@ -102,6 +102,8 @@ class NerfactoModelConfig(ModelConfig):
     """Proposal loss multiplier."""
     distortion_loss_mult: float = 0.002
     """Distortion loss multiplier."""
+    lpisp_loss_mult: float = 0.1
+    """Lpips Loss multiplier"""
     orientation_loss_mult: float = 0.0001
     """Orientation loss multipier on computed noramls."""
     pred_normal_loss_mult: float = 0.001
@@ -267,6 +269,7 @@ class NerfactoModel(Model):
             "accumulation": accumulation,
             "depth": depth,
             "weight":weights,
+            "density":field_outputs[FieldHeadNames.DENSITY],
         }
 
         if self.config.predict_normals:
@@ -302,7 +305,7 @@ class NerfactoModel(Model):
             metrics_dict["distortion"] = distortion_loss(outputs["weights_list"], outputs["ray_samples_list"])
         return metrics_dict
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None):
+    def get_loss_dict(self, outputs, batch, metrics_dict=None,step = 0):
         loss_dict = {}
         image = batch["image"].to(self.device)
         loss_dict["rgb_loss"] = self.rgb_loss(image, outputs["rgb"])
@@ -312,6 +315,10 @@ class NerfactoModel(Model):
             )
             assert metrics_dict is not None and "distortion" in metrics_dict
             loss_dict["distortion_loss"] = self.config.distortion_loss_mult * metrics_dict["distortion"]
+            # if step % 5 == 0:
+            #     loss_dict["lpisp_loss"] = self.config.lpisp_loss_mult * \
+            #                           self.lpips(image.reshape(4,32,32,-1).permute(0,3,1,2), outputs["rgb"].reshape(4,32,32,-1).permute(0,3,1,2))
+
             if self.config.predict_normals:
                 # orientation loss for computed normals
                 loss_dict["orientation_loss"] = self.config.orientation_loss_mult * torch.mean(

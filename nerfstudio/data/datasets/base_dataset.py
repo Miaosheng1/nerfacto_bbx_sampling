@@ -55,7 +55,8 @@ class InputDataset(Dataset):
     def __len__(self):
         return len(self._dataparser_outputs.image_filenames)
 
-    def get_numpy_image(self, image_idx: int) -> npt.NDArray[np.uint8]:
+    # def get_numpy_image(self, image_idx: int) -> npt.NDArray[np.uint8]:
+    def get_numpy_image(self, image_idx: int):
         """Returns the image of shape (H, W, 3 or 4).
 
         Args:
@@ -63,11 +64,14 @@ class InputDataset(Dataset):
         """
         image_filename = self._dataparser_outputs.image_filenames[image_idx]
         pil_image = Image.open(image_filename)
+        semantci_filename = self._dataparser_outputs.metadata["semantics"][image_idx]
+        semantic_img = Image.open(semantci_filename)
         if self.scale_factor != 1.0:
             width, height = pil_image.size
             newsize = (int(width * self.scale_factor), int(height * self.scale_factor))
             pil_image = pil_image.resize(newsize, resample=Image.BILINEAR)
         image = np.array(pil_image, dtype="uint8")  # shape is (h, w, 3 or 4)
+        semantic_img = np.array(semantic_img, dtype="uint8")
         # mask_filename = str(image_filename).replace("dense/images", "masks").replace(".jpg", ".npy")
         # mask = np.load(mask_filename)
         # image = image * mask[..., None]
@@ -75,7 +79,7 @@ class InputDataset(Dataset):
         assert len(image.shape) == 3
         assert image.dtype == np.uint8
         assert image.shape[2] in [3, 4], f"Image shape of {image.shape} is in correct."
-        return image
+        return image,semantic_img
 
     def get_image(self, image_idx: int) -> TensorType["image_height", "image_width", "num_channels"]:
         """Returns a 3 channel image.
@@ -83,13 +87,15 @@ class InputDataset(Dataset):
         Args:
             image_idx: The image index in the dataset.
         """
-        image = torch.from_numpy(self.get_numpy_image(image_idx).astype("float32") / 255.0)
+        image,sem_image = self.get_numpy_image(image_idx)
+        image = torch.from_numpy(image.astype("float32")/255.0)
+        sem_image = torch.from_numpy(sem_image)
         if self._dataparser_outputs.alpha_color is not None and image.shape[-1] == 4:
             assert image.shape[-1] == 4
             image = image[:, :, :3] * image[:, :, -1:] + self._dataparser_outputs.alpha_color * (1.0 - image[:, :, -1:])
         else:
             image = image[:, :, :3]
-        return image
+        return image,sem_image
 
     def get_data(self, image_idx: int) -> Dict:
         """Returns the ImageDataset data as a dictionary.
@@ -99,12 +105,15 @@ class InputDataset(Dataset):
         """
         if image_idx in self.image_cache:
             image = self.image_cache[image_idx]
+            seg_image = self.image_cache[f"semantic_{image_idx}"]
         else:
-            image = self.get_image(image_idx)
+            image,seg_image = self.get_image(image_idx)
             self.image_cache[image_idx] = image
+            self.image_cache[f"semantic_{image_idx}"] = seg_image
 
         data = {"image_idx": image_idx}
         data["image"] = image
+        data["semantic_image"] = seg_image
         for _, data_func_dict in self._dataparser_outputs.additional_inputs.items():
             assert "func" in data_func_dict, "Missing function to process data: specify `func` in `additional_inputs`"
             func = data_func_dict["func"]
@@ -124,7 +133,8 @@ class InputDataset(Dataset):
         Args:
             image_idx: The image index in the dataset.
         """
-        del data
+        # image_idx = data['image_idx']
+
         return {}
 
     def __getitem__(self, image_idx: int) -> Dict:

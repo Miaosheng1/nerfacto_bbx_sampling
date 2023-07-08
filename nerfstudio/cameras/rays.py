@@ -325,3 +325,17 @@ class RayBundle(TensorDataclass):
         )
 
         return ray_samples
+
+    def Concat_RayBundle(self,RayBundle_A, RayBundle_B) -> "RayBundle":
+        num_rays = len(RayBundle_A)
+
+        raybundle = RayBundle(
+            origins= torch.concat([RayBundle_A.origins[:num_rays//2,:],RayBundle_B.origins],dim=0),
+            directions= torch.concat([RayBundle_A.directions[:num_rays//2,:],RayBundle_B.directions],dim=0),
+            pixel_area=None,
+            camera_indices=torch.concat([RayBundle_A.camera_indices[:num_rays//2,:],RayBundle_B.camera_indices],dim=0),
+            directions_norm= torch.concat([RayBundle_A.directions_norm[:num_rays//2,:],RayBundle_B.directions_norm],dim=0),
+            times=None,
+        )
+
+        return raybundle

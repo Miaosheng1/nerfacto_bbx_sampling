@@ -416,7 +416,7 @@ class VanillaDataManager(DataManager):  # pylint: disable=abstract-method
         """Returns the next batch of data from the train dataloader."""
         self.train_count += 1
         image_batch = next(self.iter_train_image_dataloader).copy()
-        batch = self.train_pixel_sampler.sample(image_batch)
+        batch = self.train_pixel_sampler.sample(image_batch,step)
         ray_indices = batch["indices"]
         ray_bundle = self.train_ray_generator(ray_indices)
 
@@ -429,16 +429,22 @@ class VanillaDataManager(DataManager):  # pylint: disable=abstract-method
         meta = self.train_dataset.dataparser.fisheye_dict['meta']
         fisheye_mask = self.train_dataset.dataparser.fisheye_dict['mask']
 
-        imgs_idx = np.arange(len(self.train_dataset._dataparser_outputs.fisheye_dict['imgs']))
-        self.batch_fisheye_rays = torch.stack(
-            [self.generate_fixed_index_ray(img_idx=i, meta=meta, poses=poses, images=images, mask=fisheye_mask) for i in
-             imgs_idx], 0)
-        self.batch_fisheye_rays = self.batch_fisheye_rays.reshape(-1,12)
-        print("Load Fisheye Rays Loaded !")
+        num_imgs = len(self.train_dataset._dataparser_outputs.fisheye_dict['imgs'])
+
+        fisheye_list = []
+        for i in np.arange(num_imgs):
+            img_data = self.generate_fixed_index_ray(img_idx=i, meta=meta, poses=poses, images=images, mask=fisheye_mask)
+            fisheye_list.append(img_data)
+        self.batch_fisheye_rays = fisheye_list
+        self.batch_fisheye_rays = torch.stack(fisheye_list)
+        # self.batch_fisheye_rays = self.batch_fisheye_rays.reshape(-1,12)
+
+        print(f"Load Fisheye {self.batch_fisheye_rays.shape[0]} images Loaded !")
         return
 
     def generate_fixed_index_ray(self,img_idx = -1,meta=None,poses=None,offset=0.5,images=None,mask = None):
         ## if 奇数
+        img_data = torch.zeros(1400, 1400, 10).to(self.device)
         if img_idx % 2 == 0:
             k1 = meta['k1_02']
             k2 = meta['k2_02']
@@ -471,7 +477,8 @@ class VanillaDataManager(DataManager):  # pylint: disable=abstract-method
         pixels_y = pixels_y + offset
 
 
-        iter = 100000
+        # iter = 100000
+        iter = 10000
         z = torch.linspace(0.0, 1.0, iter).to(self.device).type(torch.float64)
         z_after = torch.sqrt(1 - z ** 2) / (z + mirror)
         z_dist = torch.stack([z, z_after]).permute(1,0)
@@ -525,12 +532,17 @@ class VanillaDataManager(DataManager):  # pylint: disable=abstract-method
         color = color[valid, :]
 
 
-        remain_num = np.random.randint(0, rays_v.shape[0],size = int(1e6))
+        # remain_num = np.random.randint(0, rays_v.shape[0],size = int(1e6))
         img_idx = torch.tensor(img_idx).expand(pixels_x.shape[0]).to(self.device)
         pixels = torch.stack([img_idx, pixels_y-0.5, pixels_x-0.5], dim=1).to(self.device)
-        pixels = pixels[valid, :]
+        pixels = pixels[valid, :].long()
+        c,y,x = (i.flatten() for i in torch.split(pixels, 1, dim=-1))
+        ## 1 is valid mask
+        mask = torch.tensor([1]).unsqueeze(dim=0).repeat(pixels.shape[0],1).to(self.device)
+        img_data[y,x,:] = torch.concat([rays_o,rays_v,color,mask],dim=1)
 
-        return torch.concat([rays_o[remain_num], rays_v[remain_num], color[remain_num],pixels[remain_num]],dim=1)
+        return img_data
+        # return torch.concat([rays_o[remain_num], rays_v[remain_num], color[remain_num],pixels[remain_num]],dim=1)
 
     def undistortion_from_pixel(self,x,y,z_dist,mirror):
 
@@ -542,13 +554,19 @@ class VanillaDataManager(DataManager):  # pylint: disable=abstract-method
 
     def next_train_fisheye_shuffle(self, step: int) -> Tuple[RayBundle, Dict]:
         self.train_count += 1
-        batch_size = 4096
-        selected_index = np.random.randint(0,self.batch_fisheye_rays.shape[0],size = batch_size )
-        rays_batch = self.batch_fisheye_rays[selected_index]
-        rays_o,rays_d, true_color, indices =  rays_batch[:,:3],rays_batch[:,3:6], rays_batch[:, 6: 9], rays_batch[:, 9: 12]
+        # if step % 5 == 0:
+        #     batch = self.train_pixel_sampler.sample_fisheye_with_patch(self.batch_fisheye_rays,step,patch_size=32)
+        # else:
+        batch = self.train_pixel_sampler.sample_fisheye(self.batch_fisheye_rays, step)
+
+        # batch_size = 4096
+        # selected_index = np.random.randint(0,self.batch_fisheye_rays.shape[0],size = batch_size )
+        # rays_batch = self.batch_fisheye_rays[selected_index]
+        rays_o,rays_d, true_color, indices = batch['ray_o'],batch['ray_d'],batch['image'],batch['indices']
         directions_norm = torch.norm(rays_d, dim=-1, keepdim=True)
 
         camera_indx = torch.tensor(indices[:,0] + len(self.train_dataset))[:,None].to(self.device)
+        # camera_indx = torch.tensor(indices[:, 0]).unsqueeze(-1)
 
         from nerfstudio.cameras.rays import RayBundle
         raybundle = RayBundle(
@@ -572,7 +590,7 @@ class VanillaDataManager(DataManager):  # pylint: disable=abstract-method
         """Returns the next batch of data from the eval dataloader."""
         self.eval_count += 1
         image_batch = next(self.iter_eval_image_dataloader)
-        batch = self.eval_pixel_sampler.sample(image_batch)
+        batch = self.eval_pixel_sampler.sample(image_batch,step = 0)
         ray_indices = batch["indices"]
         ray_bundle = self.eval_ray_generator(ray_indices)
         return ray_bundle, batch

@@ -275,10 +275,17 @@ class VanillaPipeline(Pipeline):
         ''' Add fisheye. fisheye combine perspective camera'''
         if self.config.datamanager.dataparser.use_fisheye:
             if step % 2 == 0:
-                ray_bundle, batch = self.datamanager.next_train(step)
-            else:
                 ray_bundle, batch = self.datamanager.next_train_fisheye_shuffle(step)
-            # ray_bundle, batch = self.datamanager.next_train_fisheye_shuffle(step)
+            else:
+                ray_bundle, batch = self.datamanager.next_train(step)
+
+            # ray_bundle_fisheye, batch_fisheye = self.datamanager.next_train_fisheye_shuffle(step)
+            # ray_bundle, batch = self.datamanager.next_train(step)
+            # ray_bundle = ray_bundle.Concat_RayBundle(ray_bundle,ray_bundle_fisheye)
+            # num_rays = len(ray_bundle)
+            # batch['image'] = torch.concat([batch['image'][:num_rays//2].to(self.device),batch_fisheye['image']],dim=0)
+            # batch['indices'] = torch.concat([batch['indices'][:num_rays // 2].to(self.device), batch_fisheye['indices']],dim=0)
+
         else:
             ''' Not add fisheye, Only perspective camera'''
             ray_bundle, batch = self.datamanager.next_train(step)
@@ -301,7 +308,7 @@ class VanillaPipeline(Pipeline):
                 self.datamanager.get_param_groups()[camera_opt_param_group][0].data[:, 3:].norm()
             )
 
-        loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict)
+        loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict,step)
 
         return model_outputs, loss_dict, metrics_dict
 

@@ -32,6 +32,6 @@ python scripts/train.py  nerfacto --pipeline.datamanager.camera-optimizer.mode o
 
 python scripts/only_inference.py --config  outputs/-data-smiao-datasets-kitti360_nerfacto_3353_50/nerfacto/2023-06-02_181503/config.yml --task testset
 
-## abalation fisheye capacity
-python scripts/train.py nerfacto --pipeline.datamanager.camera-optimizer.mode off --vis tensorboard  --trainer.max-num-iterations 30000
- --pipeline.model.log2-hashmap-size 21 --pipeline.model.feature-per-level 4 --data /data/smiao/datasets/train_02_fisheye/
+## abalation fisheye capacity 在
+CUDA_VISIBLE_DEVICES=3 python scripts/train.py nerfacto --pipeline.datamanager.camera-optimizer.mode off --vis tensorboard  --trainer.max-num-iterations 30000
+ --pipeline.model.log2-hashmap-size 21 --pipeline.model.feature-per-level 4 --descriptor fisheye_lpips --data /data/smiao/datasets/valid_03_fisheye/

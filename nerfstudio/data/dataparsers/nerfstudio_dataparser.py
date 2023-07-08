@@ -66,8 +66,10 @@ class NerfstudioDataParserConfig(DataParserConfig):
     train_split_percentage: float = 0.9
     """The percent of images to use for training. The remaining images are for eval."""
     annotation_3d = None
+    use_fisheye: bool = False
     """use fisheye """
-    use_fisheye: bool = True
+    include_semantics: bool = True
+    """whether or not to include loading of semantics data"""
 
 
 @dataclass
@@ -303,7 +305,6 @@ class Nerfstudio(DataParser):
             )
         else:
             print(f"BBx Unabled!")
-
             cameras = Cameras(
                 fx=fx,
                 fy=fy,
@@ -316,6 +317,17 @@ class Nerfstudio(DataParser):
                 camera_type=camera_type,
             )
 
+        ## semantic
+        if self.config.include_semantics:
+            empty_path = Path()
+            replace_this_path = str("train_03_semantic/")
+            with_this_path = str("train_03_semantic/semantic_imgs/seg_")
+            seg_filenames = [
+                Path(str(image_filename).replace(replace_this_path, with_this_path))
+                for image_filename in image_filenames
+            ]
+
+
         assert self.downscale_factor is not None
         cameras.rescale_output_resolution(scaling_factor=1.0 / self.downscale_factor)
 
@@ -324,6 +336,7 @@ class Nerfstudio(DataParser):
             cameras=cameras,
             scene_box=scene_box,
             mask_filenames=mask_filenames if len(mask_filenames) > 0 else None,
+            metadata={"semantics": seg_filenames} if self.config.include_semantics else {},
         )
 
         ## add fisheye param  如果要加 fisheye 记得在json 文件里 加上use_fisheye 的选项

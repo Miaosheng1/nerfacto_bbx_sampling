@@ -21,6 +21,8 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 from typing_extensions import Literal, assert_never
+from torchmetrics.functional import structural_similarity_index_measure
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from skimage.metrics import structural_similarity
 from nerfstudio.cameras.camera_paths import get_path_from_json, get_spiral_path
 from nerfstudio.cameras.cameras import Cameras
@@ -54,6 +56,7 @@ class RenderDatasets():
         self.task = parser_path.task
         self.is_leaderboard = parser_path.is_leaderboard
         self.ssim = structural_similarity
+        self.lpips = LearnedPerceptualImagePatchSimilarity()
 
     def generate_errorMap(self,ssim,index):
         ssim = np.mean(ssim,axis=-1).clip(0,1)
@@ -127,7 +130,9 @@ class RenderDatasets():
             else:
                 num_images = len(DataCache.image_cache)
                 # Test_orderInTrainlist = [2+i for i in range(num_images)]
-                Test_orderInTrainlist = [4,8,12,14]   ##  在20张的 demo 中，test_id 是[4,9,14,18]
+                # Test_orderInTrainlist = [14,16,18,20,22]   ##  在20张的 demo 中，test_id 是[4,9,14,18]
+                Test_orderInTrainlist = [4, 6, 8, 10, 12]  ##2652
+                # Test_orderInTrainlist = [24, 26, 28, 30, 32]  ## 0652
             pipeline.model.field.testset_embedding_index = Test_orderInTrainlist
         else:
             raise print("Task Input is trainset or testset")
@@ -180,6 +185,7 @@ class RenderDatasets():
 
         ''' Output rgb depth and normal image'''
         sum_psnr = 0
+        sum_lpips = 0
         for i,image in sorted(DataCache.image_cache.items()):
             if self.is_leaderboard and self.task == 'testset':
                 media.write_image(self.root_dir /"render_rgb"/ test_file[i], render_image[i])
@@ -190,6 +196,7 @@ class RenderDatasets():
                 # self.generate_errorMap(ssim_matrix,i)
                 self.generate_MSE_map(image.detach().cpu().numpy(),render_image[i],i)
                 psnr = -10. * np.log10(np.mean(np.square(image.detach().cpu().numpy() - render_image[i])))
+                lpips = self.lpips(image.unsqueeze(0).permute(0,3,1,2),torch.from_numpy(render_image[i]).unsqueeze(0).permute(0,3,1,2))
 
                 # ## 求出限制 汽车特定区域的 PSNR
                 # os.makedirs(self.root_dir / "car_mse", exist_ok=True)
@@ -201,9 +208,11 @@ class RenderDatasets():
                 # media.write_image(self.root_dir / "car_mse"/f'{self.task}_{i:02d}_car.png',ori_img)
 
                 sum_psnr += psnr
-                print("{} Mode image {} PSNR:{} ".format(self.task,i,psnr))
+                sum_lpips += lpips
+                print("{} Mode image {} PSNR:{} LPIPS: {} ".format(self.task,i,psnr,lpips))
 
-        print(f"Average PSNR:{sum_psnr/len(DataCache.image_cache)}")
+        print(f"Average PSNR: {sum_psnr/len(DataCache.image_cache)}")
+        print(f"Average LPIPS: {sum_lpips / len(DataCache.image_cache)}")
 
         for i in range(len(render_depth)):
             pred_depth = render_depth[i].squeeze(2)
@@ -222,7 +231,29 @@ class RenderDatasets():
                 media.write_image(self.root_dir/f'{self.task}_{i:02d}_normal.png', render_normal[i])
         CONSOLE.print(f"[bold blue] Store image to {self.root_dir}")
 
-
+"""  Compaer the directory image metric"""
+# def compare_dir(dir1,dir2):
+#     imgs1 = sorted(os.listdir(dir1))
+#     imgs2 = sorted(os.listdir(dir2))
+#     from PIL import Image
+#     LPIPS = LearnedPerceptualImagePatchSimilarity()
+#     def get_img(pth):
+#         return np.array(Image.open(pth), dtype=np.float32)/255.0
+#     sum_psnr = 0
+#     sum_lpips = 0
+#     for gt_img,render_img in zip(imgs1,imgs2):
+#         gt_img = torch.from_numpy(get_img(os.path.join(dir1,gt_img)))
+#         render_img = torch.from_numpy(get_img(os.path.join(dir2,render_img)))
+#
+#         psnr = -10. * np.log10(np.mean(np.square(gt_img.numpy() - render_img.numpy())))
+#         lpips = LPIPS(gt_img.unsqueeze(0).permute(0, 3, 1, 2),
+#                            render_img.unsqueeze(0).permute(0, 3, 1, 2))
+#         print(" Psnr:   {},Lpips   {}".format(psnr,lpips))
+#         sum_psnr += psnr
+#         sum_lpips += lpips
+#     print("Average Psnr:{}".format(sum_psnr/len(imgs1)))
+#     print("Average Lpips:{}".format(sum_lpips / len(imgs1)))
+#     return
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -232,3 +263,8 @@ if __name__ == "__main__":
     config = parser.parse_args()
 
     RenderDatasets(config).main()
+
+    # data_gt = "zipnerf/gt"
+    # target_rgb = "zipnerf/2625"
+    # compare_dir(dir1=data_gt, dir2=target_rgb)
+

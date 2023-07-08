@@ -676,13 +676,13 @@ method_configs["instant-ngp"] = Config(
 method_configs["mipnerf"] = Config(
     method_name="mipnerf",
     pipeline=VanillaPipelineConfig(
-        datamanager=VanillaDataManagerConfig(dataparser=NerfstudioDataParserConfig(), train_num_rays_per_batch=1024),
+        datamanager=VanillaDataManagerConfig(dataparser=NerfstudioDataParserConfig(), train_num_rays_per_batch=4096),
         model=VanillaModelConfig(
             _target=MipNerfModel,
             loss_coefficients={"rgb_loss_coarse": 0.1, "rgb_loss_fine": 1.0},
             num_coarse_samples=128,
             num_importance_samples=128,
-            eval_num_rays_per_chunk=1024,
+            eval_num_rays_per_chunk=4096,
         ),
     ),
     optimizers={

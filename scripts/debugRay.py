@@ -35,7 +35,6 @@ import cv2
 
 CONSOLE = Console(width=120)
 
-"""可视化 单条光线 在Bbx 内的采样"""
 class RenderDatasets():
     """Load a checkpoint, render the trainset and testset rgb,normal,depth, and save to the picture"""
     def __init__(self,parser_path):
@@ -55,6 +54,7 @@ class RenderDatasets():
         self.task = parser_path.task
         self.is_leaderboard = parser_path.is_leaderboard
         self.ssim = structural_similarity
+        self.camera_index = 0
 
     def generate_errorMap(self,ssim,index):
         ssim = np.mean(ssim,axis=-1).clip(0,1)
@@ -101,8 +101,6 @@ class RenderDatasets():
 
         trainDataCache = pipeline.datamanager.train_dataset
         testDatasetCache = pipeline.datamanager.eval_dataset
-        os.makedirs(self.root_dir / "error_map", exist_ok=True)
-        os.makedirs(self.root_dir / "gt_rgb", exist_ok=True)
 
         if self.task == 'trainset':
             DataCache = trainDataCache
@@ -115,7 +113,8 @@ class RenderDatasets():
             config.pipeline.model.inference_dataset = "testset"
             if self.is_leaderboard:
                 Test_orderInTrainlist = self.search_Camera_index(trainDataCache.filenames,testDatasetCache.filenames)
-                test_filename = Path('data_leader/test_name/test_{}'.format(str(config.data)[-2:])).with_suffix('.txt')
+                sequece_id = ''.join([x for x in str(config.data) if x.isdigit()])
+                test_filename = Path('data_leader/test_name/test_{}'.format(sequece_id)).with_suffix('.txt')
                 test_file = []
                 with open(test_filename, 'r') as f:
                     lines = f.readlines()
@@ -126,7 +125,8 @@ class RenderDatasets():
 
             else:
                 num_images = len(DataCache.image_cache)
-                Test_orderInTrainlist = [2+i for i in range(num_images)]
+                # Test_orderInTrainlist = [2+i for i in range(num_images)]
+                Test_orderInTrainlist = [4,8,12,14]   ##  在20张的 demo 中，test_id 是[4,9,14,18]
             pipeline.model.field.testset_embedding_index = Test_orderInTrainlist
         else:
             raise print("Task Input is trainset or testset")
@@ -144,87 +144,14 @@ class RenderDatasets():
         cameras.train_idx = train_id
 
 
-        progress = Progress(
-            TextColumn(":movie_camera: Rendering :movie_camera:"),
-            BarColumn(),
-            TaskProgressColumn(show_speed=True),
-            ItersPerSecColumn(suffix="fps"),
-            TimeRemainingColumn(elapsed_when_finished=True, compact=True),
-        )
-        render_image = []
-        render_depth = []
-        render_normal = []
-
-        ## Debug 的特定区域的代码. 像素坐标系（y,x）
-        debug_img_idx = 0
-
-        p_x = np.array([1300, 600,1200])  ## 注意 pixel_x 的范围是 [0,1450]
-        p_y = np.array([300, 150,300])     ## 注意 pixel_y 的范围是 [0,374]
-        draw_image = DataCache.image_cache[debug_img_idx].detach().cpu().numpy() * 255.0
-        p = np.stack([p_x, p_y], axis=-1)
-        for point in p:
-            cv2.circle(draw_image, point, radius=5, color=(0, 0, 255), thickness=4)
-        cv2.imwrite(os.path.join("./", "draw_point.png"), draw_image[...,[2,1,0]])
-
-        p_x = torch.from_numpy(p_x).to('cuda')
-        p_y = torch.from_numpy(p_y).to('cuda')
-        with progress:
-            camera_idx = debug_img_idx
-            camera_ray_bundle = cameras.generate_rays(camera_indices=camera_idx)
-            with torch.no_grad():
-                # outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
-                ## Debug 特定光线的 pts (Bounding Box 的实验 setting)
-                outputs = pipeline.model.get_outputs_for_fixed_raybundle(camera_ray_bundle,pixel_x=p_x,pixel_y=p_y)
-            for rendered_output_name in self.rendered_output_names:
-                if rendered_output_name not in outputs:
-                    CONSOLE.rule("Error", style="red")
-                    CONSOLE.print(f"Could not find {rendered_output_name} in the model outputs", justify="center")
-                    CONSOLE.print(f"Please set --rendered_output_name to one of: {outputs.keys()}",
-                                  justify="center")
-                    sys.exit(1)
-                output_image = outputs[rendered_output_name].cpu().numpy()
-                if rendered_output_name == 'rgb':
-                        render_image.append(output_image)
-                elif rendered_output_name == 'depth':
-                        render_depth.append(output_image)
-                elif rendered_output_name == 'normal':
-                        render_normal.append(output_image)
-        CONSOLE.print("[bold green]Rendering Images Finished")
-
-        ''' Output rgb depth and normal image'''
-        sum_psnr = 0
-        image = DataCache.image_cache[debug_img_idx]
-        if self.is_leaderboard and self.task == 'testset':
-            media.write_image(self.root_dir /"render_rgb"/ test_file[0], render_image[0])
-        else:
-            media.write_image(self.root_dir / "render_rgb" / f'{self.task}_{0:02d}_redner_rgb.png', render_image[0])
-            media.write_image(self.root_dir/"gt_rgb" / f'{self.task}_{0:02d}_gtrgb.png', (image.detach().cpu().numpy()))
-            # _,ssim_matrix = self.ssim(render_image[i],image.detach().cpu().numpy(),multichannel=True,full=True)
-            # self.generate_errorMap(ssim_matrix,i)
-            self.generate_MSE_map(image.detach().cpu().numpy(),render_image[0],0)
-            psnr = -10. * np.log10(np.mean(np.square(image.detach().cpu().numpy() - render_image[0])))
-            sum_psnr += psnr
-            print("{} Mode image {} PSNR:{} ".format(self.task,debug_img_idx,psnr))
-
-
-
-        for i in range(len(render_depth)):
-            pred_depth = render_depth[i].squeeze(2)
-            pred_depth = pred_depth.clip(0,20)
-            print(f"Predecited Depth Max:{pred_depth.max()}  clip max = 20 ")
-            plt.close('all')
-            ax = plt.subplot()
-            sc = ax.imshow((pred_depth), cmap='jet')
-            divider = make_axes_locatable(ax)
-            cax = divider.append_axes("right", size="5%", pad=0.05)
-            plt.colorbar(sc, cax=cax)
-            plt.savefig(os.path.join(str(self.root_dir)+f'/{self.task}_{i:02d}_depth.png'))
-            # pred_depth = cv2.applyColorMap(cv2.convertScaleAbs(((pred_depth / pred_depth.max()) * 255).astype(np.uint8), alpha=2), cv2.COLORMAP_JET)
-            # cv2.imwrite(str(self.root_dir)+f'/{self.task}_{i:02d}_depth.png',pred_depth)
-            if "normal" in self.rendered_output_names:
-                media.write_image(self.root_dir/f'{self.task}_{i:02d}_normal.png', render_normal[i])
-        CONSOLE.print(f"[bold blue] Store image to {self.root_dir}")
-
+        camera_ray_bundle = cameras.generate_rays(camera_indices=self.camera_index)
+        with torch.no_grad():
+            outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
+        H,W = outputs['rgb'].shape[0],outputs['rgb'].shape[1]
+        np.save(self.root_dir/"density.npy",outputs['density'].detach().cpu().numpy())
+        np.save(self.root_dir/"depth.npy",outputs['depth'].detach().cpu().numpy())
+        np.save(self.root_dir/"color.npy",outputs['rgb'].detach().cpu().numpy())
+        np.save(self.root_dir/'weight.npy',outputs["weight"].detach().cpu().numpy())
 
 
 if __name__ == "__main__":
@@ -235,5 +162,3 @@ if __name__ == "__main__":
     config = parser.parse_args()
 
     RenderDatasets(config).main()
-
-

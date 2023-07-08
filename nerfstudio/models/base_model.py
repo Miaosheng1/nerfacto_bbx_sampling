@@ -153,7 +153,7 @@ class Model(nn.Module):
         return {}
 
     @abstractmethod
-    def get_loss_dict(self, outputs, batch, metrics_dict=None) -> Dict[str, torch.Tensor]:
+    def get_loss_dict(self, outputs, batch, metrics_dict=None,step = 0) -> Dict[str, torch.Tensor]:
         """Computes and returns the losses dict.
 
         Args:
@@ -170,7 +170,7 @@ class Model(nn.Module):
             camera_ray_bundle: ray bundle to calculate outputs over
         """
         num_rays_per_chunk = self.config.eval_num_rays_per_chunk
-        if self.config.inference_dataset != "off":
+        if hasattr(self.config,"inference_dataset") and self.config.inference_dataset != "off":
             self.field.inference_dataset = self.config.inference_dataset
         image_height, image_width = camera_ray_bundle.origins.shape[:2]
         num_rays = len(camera_ray_bundle)

@@ -18,7 +18,7 @@ Code for sampling pixels.
 
 import random
 from typing import Dict
-
+import cv2
 import torch
 
 from nerfstudio.utils.images import BasicImages
@@ -49,8 +49,9 @@ def collate_image_dataset_batch(batch: Dict, num_rays_per_batch: int, keep_full_
             * torch.tensor([num_images, image_height, image_width], device=device)
         ).long()
 
+    ## c 是 image_indice (4096,)  y 是 image_height (4096,) x 是image_width (4096,)
     c, y, x = (i.flatten() for i in torch.split(indices, 1, dim=-1))
-
+    ## 使用 字典生成式 得到 对应的 indice 的 rgb 真值
     collated_batch = {
         key: value[c, y, x]
         for key, value in batch.items()
@@ -68,6 +69,55 @@ def collate_image_dataset_batch(batch: Dict, num_rays_per_batch: int, keep_full_
 
     if keep_full_image:
         collated_batch["full_image"] = batch["image"]
+
+    return collated_batch
+
+def collect_image_patch(batch: Dict, num_rays_per_batch: int, keep_full_image: bool = False,patch_size=32):
+    device = batch["image"].device
+    num_images, image_height, image_width, _ = batch["image"].shape
+    patch_num = num_rays_per_batch // (patch_size*patch_size)
+    patch_height = image_height - patch_size
+    patch_width = image_width - patch_size
+
+    ## indices is the left_top corner point
+    indices = torch.floor(
+        torch.rand((patch_num, 3), device=device)
+        * torch.tensor([num_images, patch_height, patch_width], device=device)
+    ).long()
+
+    c, y, x = (i.flatten() for i in torch.split(indices, 1, dim=-1))
+
+    y_list = []
+    x_list = []
+    for i in range(patch_num):
+        pixel_y,pixel_x = torch.meshgrid(torch.linspace(y[i],y[i]+patch_size-1,patch_size),torch.linspace(x[i],x[i]+patch_size-1,patch_size))
+        y_list.append(pixel_y)
+        x_list.append(pixel_x)
+    y = torch.concat(y_list).flatten().long()
+    x = torch.concat(x_list).flatten().long()
+    c = c.unsqueeze(-1).repeat(1,patch_size*patch_size).flatten()
+
+    collated_batch = {
+        key : value[c,y,x]
+        for key, value in batch.items()
+        if key not in ("image_idx", "src_imgs", "src_idxs", "sparse_sfm_points") and value is not None
+    }
+
+    assert collated_batch["image"].shape == (num_rays_per_batch, 3), collated_batch["image"].shape
+
+    if "sparse_sfm_points" in batch:
+        collated_batch["sparse_sfm_points"] = batch["sparse_sfm_points"].images[c[0]]
+
+    # Needed to correct the random indices to their actual camera idx locations.
+    ## batch["image_idx"][c] y x
+    # indices[:, 0] = batch["image_idx"][c]
+    collated_batch["indices"] = torch.stack([batch["image_idx"][c].to(device),y,x],dim=0).permute(1,0)  # with the abs camera indices
+
+    if keep_full_image:
+        collated_batch["full_image"] = batch["image"]
+    # ## debug image
+    # a = collated_batch['image'].reshape(patch_num,patch_size,patch_size,-1)*255.0
+    # cv2.imwrite("patch1.png",a[1,:,:,[2,1,0]].detach().cpu().numpy())
 
     return collated_batch
 
@@ -181,7 +231,7 @@ class PixelSampler:  # pylint: disable=too-few-public-methods
         """
         self.num_rays_per_batch = num_rays_per_batch
 
-    def sample(self, image_batch: Dict):
+    def sample(self, image_batch: Dict,step):
         """Sample an image batch and return a pixel batch.
 
         Args:
@@ -206,12 +256,85 @@ class PixelSampler:  # pylint: disable=too-few-public-methods
                 image_batch, self.num_rays_per_batch, keep_full_image=self.keep_full_image
             )
         elif isinstance(image_batch["image"], torch.Tensor):
-            pixel_batch = collate_image_dataset_batch(
-                image_batch, self.num_rays_per_batch, keep_full_image=self.keep_full_image
-            )
+            # if step > 20000 and step % 10 == 0:  ## After 20000 step we add lpips loss to optimize
+            #     pixel_batch = collect_image_patch(image_batch, self.num_rays_per_batch,keep_full_image=self.keep_full_image)
+            # else:
+            #     pixel_batch = collate_image_dataset_batch(image_batch, self.num_rays_per_batch, keep_full_image=self.keep_full_image)
+
+            pixel_batch = collate_image_dataset_batch(image_batch, self.num_rays_per_batch,keep_full_image=self.keep_full_image)
+
         else:
             raise ValueError("image_batch['image'] must be a list or torch.Tensor")
         return pixel_batch
+
+    def sample_fisheye_with_patch(self,image_batch,step,patch_size = 1):
+        num_images,image_width,image_height,_ = image_batch.shape
+        device = image_batch.device
+        num_patch = self.num_rays_per_batch // (patch_size * patch_size)
+
+        patch_height = image_height - patch_size
+        patch_width = image_width - patch_size
+
+        ## indices is the left_top corner point
+        indices = torch.floor(
+            torch.rand((num_patch, 1)).to(device)
+            * torch.tensor([num_images], device=device)
+        ).long()
+        c = indices.flatten()
+
+        y_list = []
+        x_list = []
+        for i in range(num_patch):
+            mask = image_batch[c[i],:,:,-1]
+            region_mask = 0
+            while region_mask < patch_size*patch_size:
+                nonzero_indices = torch.nonzero(mask, as_tuple=False)
+                chosen_indices = random.sample(range(len(nonzero_indices)), k=1)
+                indices = nonzero_indices[chosen_indices]
+                ## only sample in mask region
+                if indices[0,0] + patch_size - 1 < image_width and indices[0,1] + patch_size-1 < image_height:
+                    pixel_y, pixel_x = torch.meshgrid(torch.linspace(indices[0,0] , indices[0,0]  + patch_size - 1, patch_size),
+                                                      torch.linspace(indices[0,1], indices[0,1] + patch_size - 1, patch_size))
+                    region_mask = mask[pixel_y.flatten().long(),pixel_x.flatten().long()].sum()
+
+
+            y_list.append(pixel_y)
+            x_list.append(pixel_x)
+        y = torch.concat(y_list).flatten().long().to(device)
+        x = torch.concat(x_list).flatten().long().to(device)
+        c = c.unsqueeze(-1).repeat(1, patch_size * patch_size).flatten()
+
+        ray_data = image_batch[c,y,x]
+        collated_batch = {
+            "ray_o": ray_data[...,0:3],
+            "ray_d": ray_data[..., 3:6],
+            "image":ray_data[...,6:9],
+            "indices":torch.stack([c,y,x],dim=0).permute(1,0)
+        }
+
+        # ## debug image
+        # a = collated_batch['image'].reshape(num_patch,patch_size,patch_size,-1)*255.0
+        # cv2.imwrite("patch1.png",a[0,:,:,[2,1,0]].detach().cpu().numpy())
+
+        return collated_batch
+
+    def sample_fisheye(self, image_batch, step, patch_size=1):
+        num_images, image_width, image_height, _ = image_batch.shape
+        mask = image_batch[:,:,:,-1]
+        nonzero_indices = torch.nonzero(mask, as_tuple=False)
+        chosen_indices = random.sample(range(len(nonzero_indices)), k=self.num_rays_per_batch)
+        indices = nonzero_indices[chosen_indices]
+        c, y, x = (i.flatten() for i in torch.split(indices, 1, dim=-1))
+
+        ray_data = image_batch[c, y, x].to('cuda')
+        collated_batch = {
+            "ray_o": ray_data[..., 0:3],
+            "ray_d": ray_data[..., 3:6],
+            "image": ray_data[..., 6:9],
+            "indices": torch.stack([c, y, x], dim=0).permute(1, 0)
+        }
+
+        return collated_batch
 
 
 def collate_image_dataset_batch_equirectangular(batch: Dict, num_rays_per_batch: int, keep_full_image: bool = False):

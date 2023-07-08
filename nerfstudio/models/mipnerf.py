@@ -25,6 +25,7 @@ from torchmetrics import PeakSignalNoiseRatio
 from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
+from typing_extensions import Literal
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.field_components.encodings import NeRFEncoding
 from nerfstudio.field_components.field_heads import FieldHeadNames
@@ -53,6 +54,8 @@ class MipNerfModel(Model):
         **kwargs,
     ) -> None:
         self.field = None
+        # self.inference_dataset= "off"
+        inference_dataset: Literal["off", "trainset", "testset"] = "off"
         super().__init__(config=config, **kwargs)
 
     def populate_modules(self):
@@ -136,7 +139,7 @@ class MipNerfModel(Model):
         }
         return outputs
 
-    def get_loss_dict(self, outputs, batch, metrics_dict=None):
+    def get_loss_dict(self, outputs, batch, metrics_dict=None,step=0):
         image = batch["image"].to(self.device)
         rgb_loss_coarse = self.rgb_loss(image, outputs["rgb_coarse"])
         rgb_loss_fine = self.rgb_loss(image, outputs["rgb_fine"])
