@@ -289,6 +289,8 @@ class VanillaPipeline(Pipeline):
         else:
             ''' Not add fisheye, Only perspective camera'''
             ray_bundle, batch = self.datamanager.next_train(step)
+        ## semantic class to one-hot vector
+
 
         ## 为ray_bundle 添加bbx test_id train_id 等属性
         ray_bundle.bbx = self.datamanager.train_dataset.cameras.bbx

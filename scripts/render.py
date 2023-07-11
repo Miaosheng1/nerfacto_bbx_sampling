@@ -32,6 +32,7 @@ from nerfstudio.utils import install_checks
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import ItersPerSecColumn
 from nerfstudio.utils import plotly_utils as vis
+from nerfstudio.data.utils.label import id2label,labels,assigncolor
 
 CONSOLE = Console(width=120)
 
@@ -58,8 +59,10 @@ def _render_trajectory_video(
     """
     CONSOLE.print("[bold green]Creating trajectory video")
     images = []
+    semantic_image = []
     cameras.rescale_output_resolution(rendered_resolution_scaling_factor)
     cameras = cameras.to(pipeline.device)
+    output_semantic_filname = output_filename.with_name("sem_valid.mp4")
 
     progress = Progress(
         TextColumn(":movie_camera: Rendering :movie_camera:"),
@@ -71,33 +74,55 @@ def _render_trajectory_video(
     output_image_dir = output_filename.parent / output_filename.stem
     if output_format == "images":
         output_image_dir.mkdir(parents=True, exist_ok=True)
+
+    render_image = []
+    render_semantic = []
+
     with progress:
         for camera_idx in progress.track(range(cameras.size), description=""):
             camera_ray_bundle = cameras.generate_rays(camera_indices=camera_idx)
             with torch.no_grad():
                 ## 这个output 里面包括 rgb map, depth map,nomal map 等
                 outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
-            render_image = []
+
             for rendered_output_name in rendered_output_names:
                 if rendered_output_name not in outputs:
                     CONSOLE.rule("Error", style="red")
                     CONSOLE.print(f"Could not find {rendered_output_name} in the model outputs", justify="center")
                     CONSOLE.print(f"Please set --rendered_output_name to one of: {outputs.keys()}", justify="center")
                     sys.exit(1)
+
                 output_image = outputs[rendered_output_name].cpu().numpy()
-                render_image.append(output_image)
-            render_image = np.concatenate(render_image, axis=1)
-            if output_format == "images":
-                media.write_image(output_image_dir / f"{camera_idx:05d}.png", render_image)
-            else:
-                images.append(render_image)
+                if rendered_output_name == 'rgb':
+                    render_image.append(output_image)
+
+                elif rendered_output_name == "semantics":
+                    semantic_labels = torch.argmax(torch.nn.functional.softmax(outputs["semantics"], dim=-1), dim=-1)
+                    h, w = semantic_labels.shape[0], semantic_labels.shape[1]
+                    semantic_color_map = assigncolor(semantic_labels.reshape(-1)).reshape(h, w, 3)
+                    render_semantic.append(semantic_color_map)
+
+        render_image = np.stack(render_image, axis=0)
+        render_semantic = np.stack(render_semantic, axis=0)
+
+        if output_format == "images":
+            media.write_image(output_image_dir / f"{camera_idx:05d}.png", render_image)
+            media.write_image(output_image_dir / f"sem_{camera_idx:05d}.png", render_semantic)
+        # else:
+        #     images.append(render_image)
+        #     semantic_image.append(render_semantic)
+
 
     if output_format == "video":
-        fps = len(images) / seconds
+        fps = len(render_image) / seconds
         # make the folder if it doesn't exist
         output_filename.parent.mkdir(parents=True, exist_ok=True)
         with CONSOLE.status("[yellow]Saving video", spinner="bouncingBall"):
-            media.write_video(output_filename, images, fps=fps)
+            media.write_video(output_filename, render_image, fps=fps)
+            ## semantic
+
+        with CONSOLE.status("[yellow]Saving video", spinner="bouncingBall"):
+            media.write_video(output_semantic_filname, render_semantic, fps=fps)
     CONSOLE.rule("[green] :tada: :tada: :tada: Success :tada: :tada: :tada:")
     CONSOLE.print(f"[green]Saved video to {output_filename}", justify="center")
 
@@ -109,7 +134,7 @@ class RenderTrajectory:
     # Path to config YAML file.
     load_config: Path
     # Name of the renderer outputs to use. rgb, depth, etc. concatenates them along y axis
-    rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
+    rendered_output_names: List[str] = field(default_factory=lambda: ["rgb","semantics"])
     #  Trajectory to render.
     traj: Literal["spiral", "filename","roam"] = "spiral"
     # Scaling factor to apply to the camera image resolution.
@@ -148,7 +173,7 @@ class RenderTrajectory:
             camera_pose[:,:3,3] = new_xyz
             new_c2ws.append(camera_pose)
 
-        new_c2ws = torch.tensor(new_c2ws).reshape(-1,4,4) ##[B,N,4,4]---> [B*N,4,4]
+        new_c2ws = torch.tensor(new_c2ws).reshape(-1,4,4).float() ##[B,N,4,4]---> [B*N,4,4]
 
         return Cameras(
             fx=camera[0].fx[0],
@@ -161,6 +186,52 @@ class RenderTrajectory:
             camera_type=camera[0].camera_type,
             camera_to_worlds=new_c2ws[:,:3,:4],
         )
+
+    def generate_spiral_path(self,cameras: Cameras, bounds, n_frames=40, n_rots=2, zrate=.5):
+        """Calculates a forward facing spiral path for rendering."""
+        # Find a reasonable 'focus depth' for this dataset as a weighted average
+        # of conservative near and far bounds in disparity space.
+        NEAR_STRETCH = .9  # Push forward near bound for forward facing render path.
+        FAR_STRETCH = 5.  # Push back far bound for forward facing render path.
+        FOCUS_DISTANCE = .75  # Relative weighting of near, far bounds for render path.
+
+        poses = [cameras[i].camera_to_worlds.detach().cpu().numpy() for i in range(len(cameras))]
+        poses = np.stack(poses)
+
+        near_bound = bounds.min() * NEAR_STRETCH
+        far_bound = bounds.max() * FAR_STRETCH
+        # All cameras will point towards the world space point (0, 0, -focal).
+        focal = 1 / (((1 - FOCUS_DISTANCE) / near_bound + FOCUS_DISTANCE / far_bound))
+
+        # Get radii for spiral path using 90th percentile of camera positions.
+        positions = poses[:, :3, 3]
+        radii = np.percentile(np.abs(positions), 90, 0)
+        radii = np.concatenate([radii, [1.]])
+
+        # Generate poses for spiral path.
+        render_poses = []
+        cam2world = self.average_pose(poses)
+        up = poses[:, :3, 1].mean(0)
+        for theta in np.linspace(0., 2. * np.pi * n_rots, n_frames, endpoint=False):
+            t = radii * [np.cos(theta), -np.sin(theta), -np.sin(theta * zrate), 1.]
+            position = cam2world @ t
+            lookat = cam2world @ [0, 0, -focal, 1.]
+            z_axis = position - lookat
+            render_poses.append(self.viewmatrix(z_axis, up, position))
+        render_poses = np.stack(render_poses, axis=0).astype(np.float32)
+        render_poses = torch.from_numpy(render_poses).to(cameras[0].camera_to_worlds.device)
+
+        return Cameras(
+                fx=cameras[0].fx[0],
+                fy=cameras[0].fy[0],
+                cx=cameras[0].cx[0],
+                cy=cameras[0].cy[0],
+                height=cameras[0].height,
+                width=cameras[0].width,
+                distortion_params=cameras[0].distortion_params,
+                camera_type=cameras[0].camera_type,
+                camera_to_worlds=render_poses[:,:3,:4],
+            )
 
     def render_yaw_roam(self,camera: Cameras):
         c2w = camera.camera_to_worlds.detach().cpu().numpy()
@@ -188,8 +259,28 @@ class RenderTrajectory:
             width=camera.width,
             distortion_params=camera.distortion_params,
             camera_type=camera.camera_type,
-            camera_to_worlds=new_poses[:, :3, :4],
+            camera_to_worlds= new_poses[:, :3, :4],
         )
+
+    def average_pose(self,poses):
+        """New pose using average position, z-axis, and up vector of input poses."""
+        position = poses[:, :3, 3].mean(0)
+        z_axis = poses[:, :3, 2].mean(0)
+        up = poses[:, :3, 1].mean(0)
+        cam2world = self.viewmatrix(z_axis, up, position)
+        return cam2world
+
+    def viewmatrix(self,lookdir, up, position):
+        """Construct lookat view matrix."""
+        def normalize(x):
+            """Normalization helper function."""
+            return x / np.linalg.norm(x)
+
+        vec2 = normalize(lookdir)
+        vec0 = normalize(np.cross(up, vec2))
+        vec1 = normalize(np.cross(vec2, vec0))
+        m = np.stack([vec0, vec1, vec2, position], axis=1)
+        return m
 
 
 
@@ -207,12 +298,13 @@ class RenderTrajectory:
 
         # TODO(ethan): use camera information from parsing args
         if self.traj == "spiral":
-            camera_start = pipeline.datamanager.eval_dataloader.get_camera(image_idx=0).flatten()
-            num_cameras = len(pipeline.datamanager.eval_dataset.filenames)
-            cameras = [pipeline.datamanager.eval_dataloader.get_camera(image_idx=i) for i in range(num_cameras)]
+            # num_cameras = len(pipeline.datamanager.eval_dataset.filenames)
+            # cameras = [pipeline.datamanager.eval_dataloader.get_camera(image_idx=i) for i in range(num_cameras)]
+            cameras = pipeline.datamanager.train_dataset.cameras
             # TODO(ethan): pass in the up direction of the camera
             # camera_path = get_spiral_path(camera_start, steps=30, radius=0.1)
             camera_path = self.render_sptial_view(cameras, steps=30, radius=0.01)
+            # camera_path = self.generate_spiral_path(cameras,bounds =np.array([0,1]) )
         elif self.traj == "roam":
             camera = pipeline.datamanager.train_dataset.cameras[2]
             camera_path = self.render_yaw_roam(camera)

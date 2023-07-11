@@ -34,6 +34,7 @@ from nerfstudio.utils.rich_utils import ItersPerSecColumn
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import argparse
 import cv2
+from nerfstudio.data.utils.label import id2label,labels,assigncolor
 
 CONSOLE = Console(width=120)
 
@@ -45,7 +46,7 @@ class RenderDatasets():
         # self.rendered_output_names = ['rgb_fine', 'depth_fine']
         exp_method = str(self.load_config).split('/')[-3]
         if exp_method == 'nerfacto':
-            self.rendered_output_names = ['rgb', 'depth']
+            self.rendered_output_names = ['rgb', 'depth',"semantics"]
         elif exp_method =='vanillanerf':
             self.rendered_output_names = ['rgb_fine', 'depth_fine']
         else:
@@ -101,10 +102,12 @@ class RenderDatasets():
             test_mode= "test",
         )
 
+
         trainDataCache = pipeline.datamanager.train_dataset
         testDatasetCache = pipeline.datamanager.eval_dataset
         os.makedirs(self.root_dir / "error_map", exist_ok=True)
         os.makedirs(self.root_dir / "gt_rgb", exist_ok=True)
+        os.makedirs(self.root_dir / "semantics", exist_ok=True)
 
         if self.task == 'trainset':
             DataCache = trainDataCache
@@ -131,8 +134,8 @@ class RenderDatasets():
                 num_images = len(DataCache.image_cache)
                 # Test_orderInTrainlist = [2+i for i in range(num_images)]
                 # Test_orderInTrainlist = [14,16,18,20,22]   ##  在20张的 demo 中，test_id 是[4,9,14,18]
-                Test_orderInTrainlist = [4, 6, 8, 10, 12]  ##2652
-                # Test_orderInTrainlist = [24, 26, 28, 30, 32]  ## 0652
+                # Test_orderInTrainlist = [4, 6, 8, 10, 12]  ##2652
+                Test_orderInTrainlist = [24, 26, 28, 30, 32]  ## 0652
             pipeline.model.field.testset_embedding_index = Test_orderInTrainlist
         else:
             raise print("Task Input is trainset or testset")
@@ -160,6 +163,7 @@ class RenderDatasets():
         render_image = []
         render_depth = []
         render_normal = []
+        render_semantics = []
 
 
         with progress:
@@ -181,12 +185,20 @@ class RenderDatasets():
                         render_depth.append(output_image)
                     elif rendered_output_name == 'normal':
                         render_normal.append(output_image)
+                    elif rendered_output_name == "semantics":
+                        semantic_labels = torch.argmax(torch.nn.functional.softmax(outputs["semantics"], dim=-1),dim=-1)
+                        h, w = semantic_labels.shape[0], semantic_labels.shape[1]
+                        semantic_color_map = assigncolor(semantic_labels.reshape(-1)).reshape(h, w, 3)
+                        render_semantics.append(semantic_color_map)
         CONSOLE.print("[bold green]Rendering Images Finished")
 
         ''' Output rgb depth and normal image'''
         sum_psnr = 0
         sum_lpips = 0
-        for i,image in sorted(DataCache.image_cache.items()):
+        for i in range(len(DataCache.image_cache.items()) // 2):
+        # for i,image in sorted(DataCache.image_cache.items()):
+            image = DataCache.image_cache.get(i)                       ## rgb_gt
+            # semantic_gt = DataCache.image_cache.get("semantic_" + str(i))  ## seamntic_gt
             if self.is_leaderboard and self.task == 'testset':
                 media.write_image(self.root_dir /"render_rgb"/ test_file[i], render_image[i])
             else:
@@ -211,8 +223,13 @@ class RenderDatasets():
                 sum_lpips += lpips
                 print("{} Mode image {} PSNR:{} LPIPS: {} ".format(self.task,i,psnr,lpips))
 
-        print(f"Average PSNR: {sum_psnr/len(DataCache.image_cache)}")
-        print(f"Average LPIPS: {sum_lpips / len(DataCache.image_cache)}")
+                ## semantics
+                media.write_image(self.root_dir / "semantics" / f'{self.task}_{i:02d}_pred.png', render_semantics[i])
+                # media.write_image(self.root_dir / "semantics" / f'{self.task}_{i:02d}_gt.png', semantic_gt[i])
+
+
+        print(f"Average PSNR: {sum_psnr / len(DataCache.image_cache) * 2 }")
+        print(f"Average LPIPS: {sum_lpips / len(DataCache.image_cache) *2}")
 
         for i in range(len(render_depth)):
             pred_depth = render_depth[i].squeeze(2)

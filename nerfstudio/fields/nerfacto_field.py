@@ -50,6 +50,7 @@ from nerfstudio.fields.base_field import Field
 from nerfstudio.utils import plotly_utils as vis
 import plotly.graph_objects as go
 
+
 try:
     import tinycudann as tcnn
 except ImportError:
@@ -102,8 +103,8 @@ class TCNNNerfactoField(Field):
         appearance_embedding_dim: int = 32,
         transient_embedding_dim: int = 16,
         use_transient_embedding: bool = False,
-        use_semantics: bool = False,
-        num_semantic_classes: int = 100,
+        use_semantics: bool = True,
+        num_semantic_classes: int = 46,
         use_pred_normals: bool = False,
         use_average_appearance_embedding: bool = False,
         use_individual_appearance_embedding:bool = False,

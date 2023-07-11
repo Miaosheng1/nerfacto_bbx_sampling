@@ -52,12 +52,13 @@ from nerfstudio.model_components.renderers import (
     DepthRenderer,
     NormalsRenderer,
     RGBRenderer,
+    SemanticRenderer,
 )
 from nerfstudio.model_components.scene_colliders import NearFarCollider
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
 from nerfstudio.utils.colors import get_color
-
+from nerfstudio.data.utils.label import id2label,labels,assigncolor
 
 @dataclass
 class NerfactoModelConfig(ModelConfig):
@@ -108,6 +109,8 @@ class NerfactoModelConfig(ModelConfig):
     """Orientation loss multipier on computed noramls."""
     pred_normal_loss_mult: float = 0.001
     """Predicted normal loss multiplier."""
+    pred_semantic_loss_mult: float = 0.01
+    """Predicted Semantic loss multiplier."""
     use_proposal_weight_anneal: bool = True
     """Whether to use proposal weight annealing."""
     use_average_appearance_embedding: bool = False
@@ -204,9 +207,11 @@ class NerfactoModel(Model):
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer(method='expected')
         self.renderer_normals = NormalsRenderer()
+        self.renderer_semantics = SemanticRenderer()
 
         # losses
         self.rgb_loss = MSELoss()
+        self.cross_entropy_loss = torch.nn.CrossEntropyLoss(reduction="mean")
 
         # metrics
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
@@ -264,6 +269,7 @@ class NerfactoModel(Model):
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
         accumulation = self.renderer_accumulation(weights=weights)
 
+
         outputs = {
             "rgb": rgb,
             "accumulation": accumulation,
@@ -271,6 +277,10 @@ class NerfactoModel(Model):
             "weight":weights,
             "density":field_outputs[FieldHeadNames.DENSITY],
         }
+
+        ## semantic
+        if field_outputs[FieldHeadNames.SEMANTICS] is not None:
+            outputs["semantics"] = self.renderer_semantics(field_outputs[FieldHeadNames.SEMANTICS], weights=weights)
 
         if self.config.predict_normals:
             outputs["normals"] = self.renderer_normals(normals=field_outputs[FieldHeadNames.NORMALS], weights=weights)
@@ -329,6 +339,10 @@ class NerfactoModel(Model):
                 loss_dict["pred_normal_loss"] = self.config.pred_normal_loss_mult * torch.mean(
                     outputs["rendered_pred_normal_loss"]
                 )
+
+            # semantic loss
+            loss_dict["semantics_loss"] = self.config.pred_semantic_loss_mult * self.cross_entropy_loss(outputs["semantics"],
+                                                                  batch["semantic_image"].long())
         return loss_dict
 
     def get_image_metrics_and_images(
@@ -362,6 +376,11 @@ class NerfactoModel(Model):
 
         images_dict = {"img": combined_rgb, "accumulation": combined_acc, "depth": combined_depth}
 
+        # semantics
+        semantic_labels = torch.argmax(torch.nn.functional.softmax(outputs["semantics"], dim=-1), dim=-1)
+        h,w = semantic_labels.shape[0],semantic_labels.shape[1]
+        images_dict["semantics_colormap"] = torch.from_numpy(assigncolor(semantic_labels.reshape(-1)).reshape(h,w,3))
+
         # normals to RGB for visualization. TODO: use a colormap
         if "normals" in outputs:
             images_dict["normals"] = (outputs["normals"] + 1.0) / 2.0
@@ -377,3 +396,4 @@ class NerfactoModel(Model):
             images_dict[key] = prop_depth_i
 
         return metrics_dict, images_dict
+
