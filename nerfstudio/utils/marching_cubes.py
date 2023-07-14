@@ -4,7 +4,11 @@ import numpy as np
 import pymeshlab
 import torch
 import trimesh
+import mcubes
 from skimage import measure
+import open3d as o3d
+from nerfstudio.data.utils.label import id2label,labels,assigncolor
+
 
 avg_pool_3d = torch.nn.AvgPool3d(2, stride=2)
 upsample = torch.nn.Upsample(scale_factor=2, mode="nearest")
@@ -190,6 +194,7 @@ def get_surface_occupancy(
     def evaluate(points):
         z = []
         for _, pnts in enumerate(torch.split(points, 100000, dim=0)):
+
             z.append(occupancy_fn(pnts.contiguous()).contiguous())
         z = torch.cat(z, axis=0)
         return z
@@ -212,3 +217,91 @@ def get_surface_occupancy(
         meshexport.export(str(output_path))
     else:
         print("=================================================no surface skip")
+
+@torch.no_grad()
+def get_density_voxel(
+        density_fn,
+        semantic_fn,
+        resolution=512,
+        bounding_box_min=(-1.0, -1.0, -1.0),
+        bounding_box_max=(1.0, 1.0, 1.0),
+        fine_voxel_size=0.01,
+        coarse_voxel_size = 0.02,
+        device=None,
+        output_path: Path = Path("test.ply"),
+):
+    ## 对finegrid 每 N 个grid 进行堆叠
+    N = coarse_voxel_size / fine_voxel_size
+
+    grid_min = bounding_box_min
+    grid_max = bounding_box_max
+
+    ## generate fine grid
+    xs = np.arange(grid_min[0],grid_max[0],fine_voxel_size)
+    ys = np.arange(grid_min[1], grid_max[1], fine_voxel_size )
+    zs = np.arange(grid_min[2], grid_max[2], fine_voxel_size )
+
+    threshold = 1
+
+    ## evaluate voxel density
+    def evaluate(points):
+        z = []
+        for _, pnts in enumerate(torch.split(points, 100000, dim=0)):
+            pnts_density = density_fn(pnts.view(-1,3)).contiguous()
+            z.append(pnts_density)
+        z = torch.cat(z, axis=0)
+        return z
+
+    ## evaluate voxel semantic
+    def evaluate_semantic(points):
+        s = []
+        for _, pnts in enumerate(torch.split(points, 100000, dim=0)):
+            output_shape = pnts.shape
+            pnts_semantics = semantic_fn(pnts.contiguous())
+            s.append(pnts_semantics)
+        s = torch.cat(s, axis=0)
+        return s
+
+    xx, yy, zz = np.meshgrid(xs, ys, zs, indexing="ij")
+    ## get the center of the voxel grid
+    fine_voxel = torch.tensor(np.vstack([xx.ravel(), yy.ravel(), zz.ravel()]).T, dtype=torch.float).cuda()
+    z = evaluate(fine_voxel)
+    s = evaluate_semantic(fine_voxel).unsqueeze(dim=-1)
+    valid_mask = z > threshold
+    voxel_data = torch.concat([fine_voxel[valid_mask],s[valid_mask]],dim=-1)
+
+
+
+    ## Constrcuct Coarse Grid
+    # x_range = np.arange(grid_min[0], grid_max[0], coarse_voxel_size)
+    # y_range = np.arange(grid_min[1], grid_max[1], coarse_voxel_size)
+    # z_range = np.arange(grid_min[2], grid_max[2], coarse_voxel_size)
+    # coars_voxel_data=[]
+    # coarse_voxel_half_length = fine_voxel_size*N/2
+    # for x in x_range:
+    #     for y in y_range:
+    #         for z in z_range:
+    #
+
+
+
+
+
+    ## Visualize
+    voxel_data = voxel_data.detach().cpu().numpy()
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(voxel_data[:, :3])
+    colors = assigncolor(voxel_data[:, 3])
+    point_cloud.colors = o3d.utility.Vector3dVector(colors)
+
+    voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(point_cloud,voxel_size=fine_voxel_size)
+    o3d.io.write_voxel_grid("semantic_voxel.ply", voxel_grid)
+    print("Voxelization Done!")
+
+
+    # np.save("semantic_voxel.npy",voxel_data.detach().cpu().numpy())
+    # print("Semantic Voxel Genrated!")
+    # vertices, triangles = mcubes.marching_cubes(z.reshape(x_width, y_width, z_width), threshold)
+    # mesh = trimesh.Trimesh(vertices, triangles)
+    # mesh.export(output_path)
+    return

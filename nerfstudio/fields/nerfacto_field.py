@@ -273,6 +273,22 @@ class TCNNNerfactoField(Field):
         density = trunc_exp(density_before_activation.to(positions))[:, 0]
         return density, base_mlp_out
 
+    def get_pos_semantic_class(self,positions):
+        density, density_embedding = self.get_pos_density(positions)
+        outputs_shape = density.shape
+        density_embedding_copy = density_embedding.clone().detach()
+        semantics_input = torch.cat(
+            [
+                density_embedding_copy.view(-1, self.geo_feat_dim),
+            ],
+            dim=-1,
+        )
+        x = self.mlp_semantics(semantics_input).view(*outputs_shape, -1).to(density)
+        semantics = self.field_head_semantics(x)
+        semantics = torch.argmax(torch.nn.functional.softmax(semantics, dim=-1), dim=-1)
+        return semantics
+
+
     def get_outputs(self, ray_samples: RaySamples, density_embedding: Optional[TensorType] = None):
         assert density_embedding is not None
         outputs = {}
@@ -359,7 +375,7 @@ class TCNNNerfactoField(Field):
 
         return outputs
 
-
+## Not use this class
 class TorchNerfactoField(Field):
     """
     PyTorch implementation of the compound field.
