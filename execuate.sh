@@ -32,6 +32,21 @@ python scripts/train.py  nerfacto --pipeline.datamanager.camera-optimizer.mode o
 
 python scripts/only_inference.py --config  outputs/-data-smiao-datasets-kitti360_nerfacto_3353_50/nerfacto/2023-06-02_181503/config.yml --task testset
 
-## abalation fisheye capacity 在
+## abalation fisheye capacity
 CUDA_VISIBLE_DEVICES=3 python scripts/train.py nerfacto --pipeline.datamanager.camera-optimizer.mode off --vis tensorboard  --trainer.max-num-iterations 30000
  --pipeline.model.log2-hashmap-size 21 --pipeline.model.feature-per-level 4 --descriptor fisheye_lpips --data /data/smiao/datasets/valid_03_fisheye/
+
+## render semantic video and rgb video
+CUDA_VISIBLE_DEVICES=3 python scripts/render.py --load-config outputs/-data-smiao-datasets-waymodata/nerfacto/60_add_semantic/config.yml --traj spiral --output-path valid03.mp4
+
+## add new waymodata perser in nerfacto method
+python scripts/train.py nerfacto --pipeline.datamanager.camera-optimizer.mode off --vis tensorboard  --trainer.max-num-iterations 30000  \
+--descriptor add_semantic waymo-data --data /data/smiao/datasets/waymodata
+
+## extracct semantic pointcloud from render depth
+python scripts/exporter.py pointcloud --load-config outputs/-data-smiao-datasets-waymodata_noisy/nerfacto/nvida_semantic/config.yml \
+--output-dir pointcloud_waymo \
+--output_semantic_pointcloud True
+
+## run wo semantics  [best res:8192_23]
+python scripts/train.py nerfacto --pipeline.model.pred_semantic_loss_mult 0.0 --descriptor None --data /data/smiao/datasets/valid_0652_test20/

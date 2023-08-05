@@ -42,7 +42,10 @@ from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.configs.base_config import Config  # pylint: disable=unused-import
 from nerfstudio.pipelines.base_pipeline import Pipeline
 from nerfstudio.utils.rich_utils import ItersPerSecColumn
+from nerfstudio.data.utils.label import assigncolor
+# from nerfstudio.data.utils.waymo_lable import id2label,labels,assigncolor
 
+import mediapy as media
 CONSOLE = Console(width=120)
 
 
@@ -90,11 +93,14 @@ def generate_point_cloud(
     estimate_normals: bool = False,
     rgb_output_name: str = "rgb",
     depth_output_name: str = "depth",
+    semantic_output_name: str = None,
     normal_output_name: Optional[str] = None,
     use_bounding_box: bool = True,
     bounding_box_min: Tuple[float, float, float] = (-1.0, -1.0, -1.0),
     bounding_box_max: Tuple[float, float, float] = (1.0, 1.0, 1.0),
     std_ratio: float = 10.0,
+    use_single_image = False,
+    output_dir = None,
 ) -> o3d.geometry.PointCloud:
     """Generate a point cloud from a nerf.
 
@@ -126,13 +132,22 @@ def generate_point_cloud(
     points = []
     rgbs = []
     normals = []
+    semantics = []
     with progress as progress_bar:
         task = progress_bar.add_task("Generating Point Cloud", total=num_points)
         while not progress_bar.finished:
             torch.cuda.empty_cache()
             with torch.no_grad():
-                ray_bundle, _ = pipeline.datamanager.next_train(0)
-                outputs = pipeline.model(ray_bundle)
+                if use_single_image:
+                    ray_bundle = pipeline.datamanager.train_dataset.cameras.generate_rays(camera_indices=0).to('cuda')
+                    outputs = pipeline.model.get_outputs_for_camera_ray_bundle(ray_bundle)
+                    h,w = pipeline.datamanager.train_dataset.cameras.height[0],pipeline.datamanager.train_dataset.cameras.width[0]
+
+                else:
+                    ray_bundle, _ = pipeline.datamanager.next_train(0)
+                    outputs = pipeline.model(ray_bundle)
+
+
             if rgb_output_name not in outputs:
                 CONSOLE.rule("Error", style="red")
                 CONSOLE.print(f"Could not find {rgb_output_name} in the model outputs", justify="center")
@@ -145,6 +160,22 @@ def generate_point_cloud(
                 sys.exit(1)
             rgb = outputs[rgb_output_name]
             depth = outputs[depth_output_name]
+            ## save rgb and depth for single pointcloud
+            if use_single_image:
+                media.write_image(str(output_dir) + "/render_rgb.png", rgb.view(h, w, -1).cpu().numpy())
+                pred_depth = depth.view(h, w, -1).cpu().numpy()
+                pred_depth = pred_depth.clip(0, 20)
+                import matplotlib.pyplot as plt
+                from mpl_toolkits.axes_grid1 import make_axes_locatable
+                plt.close('all')
+                ax = plt.subplot()
+                sc = ax.imshow((pred_depth), cmap='jet')
+                divider = make_axes_locatable(ax)
+                cax = divider.append_axes("right", size="5%", pad=0.05)
+                plt.colorbar(sc, cax=cax)
+                plt.savefig(str(output_dir) + "/render_depth.png")
+
+
             if normal_output_name is not None:
                 if normal_output_name not in outputs:
                     CONSOLE.rule("Error", style="red")
@@ -152,6 +183,9 @@ def generate_point_cloud(
                     CONSOLE.print(f"Please set --normal_output_name to one of: {outputs.keys()}", justify="center")
                     sys.exit(1)
                 normal = outputs[normal_output_name]
+            if semantic_output_name is not None:
+                semantic = torch.argmax(torch.nn.functional.softmax(outputs[semantic_output_name], dim=-1), dim=-1)
+
             point = ray_bundle.origins + ray_bundle.directions * depth
 
             if use_bounding_box:
@@ -165,14 +199,30 @@ def generate_point_cloud(
                 rgb = rgb[mask]
                 if normal_output_name is not None:
                     normal = normal[mask]
+                if semantic_output_name is not None:
+                    semantic = semantic[mask]
 
             points.append(point)
             rgbs.append(rgb)
+
+
+
             if normal_output_name is not None:
                 normals.append(normal)
+            if semantic_output_name is not None:
+                semantics.append(semantic)
             progress.advance(task, point.shape[0])
     points = torch.cat(points, dim=0)
-    rgbs = torch.cat(rgbs, dim=0)
+    if semantic_output_name is None:
+        rgbs = torch.cat(rgbs, dim=0)
+    else:
+        rgbs = torch.cat(semantics,dim=0)
+        Nosky_region = ~(rgbs == 23)
+        rgbs = torch.from_numpy(assigncolor(rgbs.reshape(-1)))
+
+        ## eliminate sky pointcloud
+        points = points[Nosky_region]
+        rgbs = rgbs[Nosky_region]
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points.float().cpu().numpy())
@@ -202,7 +252,7 @@ def generate_point_cloud(
             normals = normals[ind]
         pcd.normals = o3d.utility.Vector3dVector(normals.float().cpu().numpy())
 
-    return pcd
+    return pcd, points
 
 
 def render_trajectory(

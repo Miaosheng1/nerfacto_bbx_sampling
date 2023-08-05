@@ -7,8 +7,10 @@ import trimesh
 import mcubes
 from skimage import measure
 import open3d as o3d
+""" for kitti360 label"""
 from nerfstudio.data.utils.label import id2label,labels,assigncolor
-
+""" for waymo label """
+# from nerfstudio.data.utils.waymo_lable import assigncolor
 
 avg_pool_3d = torch.nn.AvgPool3d(2, stride=2)
 upsample = torch.nn.Upsample(scale_factor=2, mode="nearest")
@@ -241,7 +243,7 @@ def get_density_voxel(
     ys = np.arange(grid_min[1], grid_max[1], fine_voxel_size )
     zs = np.arange(grid_min[2], grid_max[2], fine_voxel_size )
 
-    threshold = 1
+    threshold = 2.0
 
     ## evaluate voxel density
     def evaluate(points):
@@ -272,20 +274,6 @@ def get_density_voxel(
 
 
 
-    ## Constrcuct Coarse Grid
-    # x_range = np.arange(grid_min[0], grid_max[0], coarse_voxel_size)
-    # y_range = np.arange(grid_min[1], grid_max[1], coarse_voxel_size)
-    # z_range = np.arange(grid_min[2], grid_max[2], coarse_voxel_size)
-    # coars_voxel_data=[]
-    # coarse_voxel_half_length = fine_voxel_size*N/2
-    # for x in x_range:
-    #     for y in y_range:
-    #         for z in z_range:
-    #
-
-
-
-
 
     ## Visualize
     voxel_data = voxel_data.detach().cpu().numpy()
@@ -295,7 +283,7 @@ def get_density_voxel(
     point_cloud.colors = o3d.utility.Vector3dVector(colors)
 
     voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(point_cloud,voxel_size=fine_voxel_size)
-    o3d.io.write_voxel_grid("semantic_voxel.ply", voxel_grid)
+    o3d.io.write_voxel_grid(str(output_path), voxel_grid)
     print("Voxelization Done!")
 
 

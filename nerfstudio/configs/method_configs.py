@@ -630,10 +630,13 @@ method_configs["nerfacto"] = Config(
             train_num_rays_per_batch=4096,
             eval_num_rays_per_batch=4096,
             camera_optimizer=CameraOptimizerConfig(
-                mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
+                mode="off", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
             ),
         ),
-        model=NerfactoModelConfig(eval_num_rays_per_chunk=1 << 15),
+        model=NerfactoModelConfig(eval_num_rays_per_chunk=1 << 15,
+                                  num_levels=16,
+                                  max_res=4096 * 2,
+                                  log2_hashmap_size=23),
     ),
     optimizers={
         "proposal_networks": {
@@ -646,7 +649,7 @@ method_configs["nerfacto"] = Config(
         },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
-    vis="viewer",
+    vis="tensorboard",
 )
 
 method_configs["instant-ngp"] = Config(

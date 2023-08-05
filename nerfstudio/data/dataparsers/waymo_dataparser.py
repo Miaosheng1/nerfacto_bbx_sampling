@@ -11,8 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Data parser for nerfstudio datasets. """
-
 from __future__ import annotations
 
 import math
@@ -43,11 +41,12 @@ CONSOLE = Console(width=120)
 MAX_AUTO_RESOLUTION = 1600
 from nerfstudio.data.utils.annotation_3d import Annotation3D, global2local,id2label
 
-@dataclass
-class NerfstudioDataParserConfig(DataParserConfig):
-    """Nerfstudio dataset config"""
 
-    _target: Type = field(default_factory=lambda: Nerfstudio)
+@dataclass
+class WaymoDataParserConfig(DataParserConfig):
+    """Blender dataset parser config"""
+
+    _target: Type = field(default_factory=lambda: Waymo)
     """target class to instantiate"""
     data: Path = Path("data/nerfstudio/poster")
     """Directory specifying location of data."""
@@ -66,20 +65,22 @@ class NerfstudioDataParserConfig(DataParserConfig):
     train_split_percentage: float = 0.9
     """The percent of images to use for training. The remaining images are for eval."""
     annotation_3d = None
-    """annotation 3D bbx in kitti360"""
     use_fisheye: bool = False
-    """ use fisheye """
+    """use fisheye """
     include_semantics: bool = True
-    """if use semantics for training"""
-    mannual_assigned: bool = False
-    """ mannual assigned train/test number """
+    """whether or not to include loading of semantics data"""
+    mannual_assigned = True
 
 
 @dataclass
-class Nerfstudio(DataParser):
+class Waymo(DataParser):
+    """Waymo Dataset
+    Some of this code comes from https://github.com/yenchenlin/nerf-pytorch/blob/master/load_blender.py#L37.
+    """
+
     """Nerfstudio DatasetParser"""
 
-    config: NerfstudioDataParserConfig
+    config: WaymoDataParserConfig
     downscale_factor: Optional[int] = None
 
     def _generate_dataparser_outputs(self, split="train"):
@@ -90,7 +91,7 @@ class Nerfstudio(DataParser):
         mask_filenames = []
         poses = []
         num_skipped_image_filenames = 0
-        img_index=[]
+        img_index = []
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -110,6 +111,8 @@ class Nerfstudio(DataParser):
         height = []
         width = []
         distort = []
+        intristic = []
+
 
         for frame in meta["frames"]:
             filepath = PurePath(frame["file_path"])
@@ -118,24 +121,24 @@ class Nerfstudio(DataParser):
                 num_skipped_image_filenames += 1
                 continue
 
-            if not fx_fixed:
-                assert "fl_x" in frame, "fx not specified in frame"
-                fx.append(float(frame["fl_x"]))
-            if not fy_fixed:
-                assert "fl_y" in frame, "fy not specified in frame"
-                fy.append(float(frame["fl_y"]))
-            if not cx_fixed:
-                assert "cx" in frame, "cx not specified in frame"
-                cx.append(float(frame["cx"]))
-            if not cy_fixed:
-                assert "cy" in frame, "cy not specified in frame"
-                cy.append(float(frame["cy"]))
-            if not height_fixed:
-                assert "h" in frame, "height not specified in frame"
-                height.append(int(frame["h"]))
-            if not width_fixed:
-                assert "w" in frame, "width not specified in frame"
-                width.append(int(frame["w"]))
+            # if not fx_fixed:
+            #     assert "fl_x" in frame, "fx not specified in frame"
+            #     fx.append(float(frame["fl_x"]))
+            # if not fy_fixed:
+            #     assert "fl_y" in frame, "fy not specified in frame"
+            #     fy.append(float(frame["fl_y"]))
+            # if not cx_fixed:
+            #     assert "cx" in frame, "cx not specified in frame"
+            #     cx.append(float(frame["cx"]))
+            # if not cy_fixed:
+            #     assert "cy" in frame, "cy not specified in frame"
+            #     cy.append(float(frame["cy"]))
+            # if not height_fixed:
+            #     assert "h" in frame, "height not specified in frame"
+            #     height.append(int(frame["h"]))
+            # if not width_fixed:
+            #     assert "w" in frame, "width not specified in frame"
+            #     width.append(int(frame["w"]))
             if not distort_fixed:
                 distort.append(
                     camera_utils.get_distortion_params(
@@ -149,6 +152,11 @@ class Nerfstudio(DataParser):
                 )
 
             image_filenames.append(fname)
+            intrinsics = torch.tensor(frame["intrinsics"])
+            fx.append(intrinsics[0, 0])
+            fy.append(intrinsics[1, 1])
+            cx.append(intrinsics[0, 2])
+            cy.append(intrinsics[1, 2])
             poses.append(np.array(frame["transform_matrix"]))
             if "mask_path" in frame:
                 mask_filepath = PurePath(frame["mask_path"])
@@ -160,17 +168,17 @@ class Nerfstudio(DataParser):
         if num_skipped_image_filenames >= 0:
             CONSOLE.log(f"Skipping {num_skipped_image_filenames} files in dataset split {split}.")
         assert (
-            len(image_filenames) != 0
+                len(image_filenames) != 0
         ), """
-        No image files found. 
-        You should check the file_paths in the transforms.json file to make sure they are correct.
-        """
+           No image files found. 
+           You should check the file_paths in the transforms.json file to make sure they are correct.
+           """
         assert len(mask_filenames) == 0 or (
-            len(mask_filenames) == len(image_filenames)
+                len(mask_filenames) == len(image_filenames)
         ), """
-        Different number of image and mask filenames.
-        You should check that mask_path is specified for every frame (or zero frames) in transforms.json.
-        """
+           Different number of image and mask filenames.
+           You should check that mask_path is specified for every frame (or zero frames) in transforms.json.
+           """
 
         # filter image_filenames and poses based on train/eval split percentage
         num_images = len(image_filenames)
@@ -180,7 +188,7 @@ class Nerfstudio(DataParser):
             i_train = []
             for i in range(0, num_images, 2):
                 if i % 4 == 0:
-                    i_train.extend([i,i+1])
+                    i_train.extend([i, i + 1])
             i_train = np.array(i_train)
             num_train_images = len(i_train)
             i_eval = np.setdiff1d(i_all, i_train)[:-2]  # Demo kitti360
@@ -190,6 +198,9 @@ class Nerfstudio(DataParser):
             i_eval = np.setdiff1d(i_all, i_train)
             # i_train = np.arange(10,79)
             # i_eval = np.arange(83,99)
+        elif self.config.mannual_assigned:
+            i_eval = np.array([20, 40])
+            i_train = np.setdiff1d(i_all, i_eval)
         else:
             self.config.train_split_percentage = 0.8
             num_train_images = math.ceil(num_images * self.config.train_split_percentage)
@@ -215,8 +226,12 @@ class Nerfstudio(DataParser):
             orientation_method = self.config.orientation_method
 
         poses = torch.from_numpy(np.array(poses).astype(np.float32))
+        fx = torch.stack(fx)
+        fy = torch.stack(fy)
+        cx = torch.stack(cx)
+        cy = torch.stack(cy)
 
-        diff_mean_poses = torch.mean(poses[:,:3,-1], dim=0)
+        diff_mean_poses = torch.mean(poses[:, :3, -1], dim=0)
         poses, _ = camera_utils.auto_orient_and_center_poses(
             poses,
             method=orientation_method,
@@ -229,12 +244,13 @@ class Nerfstudio(DataParser):
             scale_factor /= torch.max(torch.abs(poses[:, :3, 3]))
 
         poses[:, :3, 3] *= scale_factor * self.config.scale_factor
-
+        poses[:, 0:3, 1:3] *= -1
 
         # Choose image_filenames and poses based on split, but after auto orient and scaling the poses.
         image_filenames = [image_filenames[i] for i in indices]
         mask_filenames = [mask_filenames[i] for i in indices] if len(mask_filenames) > 0 else []
         poses = poses[indices]
+
 
         # in x,y,z order
         # assumes that the scene is centered at the origin
@@ -251,12 +267,13 @@ class Nerfstudio(DataParser):
             camera_type = CameraType.PERSPECTIVE
 
         idx_tensor = torch.tensor(indices, dtype=torch.long)
-        fx = float(meta["fl_x"]) if fx_fixed else torch.tensor(fx, dtype=torch.float32)[idx_tensor]
-        fy = float(meta["fl_y"]) if fy_fixed else torch.tensor(fy, dtype=torch.float32)[idx_tensor]
-        cx = float(meta["cx"]) if cx_fixed else torch.tensor(cx, dtype=torch.float32)[idx_tensor]
-        cy = float(meta["cy"]) if cy_fixed else torch.tensor(cy, dtype=torch.float32)[idx_tensor]
-        height = int(meta["h"]) if height_fixed else torch.tensor(height, dtype=torch.int32)[idx_tensor]
-        width = int(meta["w"]) if width_fixed else torch.tensor(width, dtype=torch.int32)[idx_tensor]
+        ## becasue the waymo camera have the different intristics
+        fx = fx[indices]
+        fy = fy[indices]
+        cx = cx[indices]
+        cy = cy[indices]
+        height = torch.tensor(1280, dtype=torch.int32)
+        width = torch.tensor(1920, dtype=torch.int32)
         if distort_fixed:
             distortion_params = camera_utils.get_distortion_params(
                 k1=float(meta["k1"]) if "k1" in meta else 0.0,
@@ -323,14 +340,22 @@ class Nerfstudio(DataParser):
 
         ## semantic
         if self.config.include_semantics:
-            current_path = Path(self.config.data)
-            replace_this_path = str(current_path) + "/"
-            with_this_path = replace_this_path + str("/semantic_imgs/seg_")
+            empty_path = Path()
+            replace_this_path = str("waymodata_noisy/")
+            with_this_path = str("waymodata_noisy/semantics/pred/")
             seg_filenames = [
                 Path(str(image_filename).replace(replace_this_path, with_this_path))
                 for image_filename in image_filenames
             ]
 
+            # ## rename to suit waymo noisy
+            # base_path = '/data/smiao/datasets/waymodata_noisy/semantics/pred/'
+            # #base_path = '/data/smiao/datasets/waymodata/semantics/pred/'
+            # new_segfilenames = []
+            # for i in range(len(seg_filenames)):  # 从000.png到010.png
+            #     new_filename = f'{i:08d}_pred.png'  # 格式化为八位数的文件名
+            #     new_path = base_path + new_filename
+            #     new_segfilenames.append(new_path)
 
         assert self.downscale_factor is not None
         cameras.rescale_output_resolution(scaling_factor=1.0 / self.downscale_factor)
@@ -345,17 +370,19 @@ class Nerfstudio(DataParser):
 
         ## add fisheye param  如果要加 fisheye 记得在json 文件里 加上use_fisheye 的选项
         if self.config.use_fisheye and 'use_fisheye' in meta:
-            fisheye_poses, fisheye_imgs, fisheye_meta,mask = self.load_fish_eye_param(diff_mean_poses=diff_mean_poses, scale_factor=scale_factor,config_data=self.config.data)
+            fisheye_poses, fisheye_imgs, fisheye_meta, mask = self.load_fish_eye_param(diff_mean_poses=diff_mean_poses,
+                                                                                       scale_factor=scale_factor,
+                                                                                       config_data=self.config.data)
             fisheye_dict = {
-                'pose':fisheye_poses,
-                'imgs':fisheye_imgs,
-                'meta':fisheye_meta,
-                'mask':mask,
+                'pose': fisheye_poses,
+                'imgs': fisheye_imgs,
+                'meta': fisheye_meta,
+                'mask': mask,
             }
             dataparser_outputs.fisheye_dict = fisheye_dict
         return dataparser_outputs
 
-    def load_fish_eye_param(self,diff_mean_poses,scale_factor,config_data = None, use_mask = True):
+    def load_fish_eye_param(self, diff_mean_poses, scale_factor, config_data=None, use_mask=True):
 
         meta = load_from_json(config_data / Path("transforms_fisheye.json"))
         image_filenames = []
@@ -377,10 +404,9 @@ class Nerfstudio(DataParser):
         poses[:, :3, -1] -= diff_mean_poses
         poses[:, :3, 3] *= scale_factor
 
-
-        fisheye_mask = cv.imread(str(config_data) + "/mask.png")/ 255.0
-        fisheye_mask = fisheye_mask.astype(np.int32)[...,0]
-        return poses, images, meta,fisheye_mask
+        fisheye_mask = cv.imread(str(config_data) + "/mask.png") / 255.0
+        fisheye_mask = fisheye_mask.astype(np.int32)[..., 0]
+        return poses, images, meta, fisheye_mask
 
     def _get_fname(self, filepath: PurePath, downsample_folder_prefix="images_") -> Path:
         """Get the filename of the image file.
@@ -396,11 +422,11 @@ class Nerfstudio(DataParser):
                 while True:
                     if (max_res / 2 ** (df)) < MAX_AUTO_RESOLUTION:
                         break
-                    if not (self.config.data / f"{downsample_folder_prefix}{2**(df+1)}" / filepath.name).exists():
+                    if not (self.config.data / f"{downsample_folder_prefix}{2 ** (df + 1)}" / filepath.name).exists():
                         break
                     df += 1
 
-                self.downscale_factor = 2**df
+                self.downscale_factor = 2 ** df
                 CONSOLE.log(f"Auto image downscale factor of {self.downscale_factor}")
             else:
                 self.downscale_factor = self.config.downscale_factor
@@ -408,76 +434,3 @@ class Nerfstudio(DataParser):
         if self.downscale_factor > 1:
             return self.config.data / f"{downsample_folder_prefix}{self.downscale_factor}" / filepath.name
         return self.config.data / filepath
-
-
-    def load_bbx(self,instance_imgs = None,bbx2w =None,scale = 1,diff_centor_translation=0):
-        num_bbx = len(instance_imgs)
-
-        w2c = np.linalg.inv(bbx2w)
-        R_w2c = w2c[:3, :3]
-        t_w2c = w2c[:3, 3:]
-        all_bbxes = []
-        for img_id in range(num_bbx):
-            instance_map = instance_imgs[img_id]
-            car_global = instance_map[(instance_map > 26 * 1000) & (instance_map < 27 * 1000)]  ## Car 的global id 在26000-27000之间
-            set_idx = np.unique(car_global)
-
-            ## 找出该张图像对应的bbx 的 8个顶点（w系）
-            vertices = []
-            for idx in set_idx:
-                vertice = self.annotation_3d.objects[idx][-1].vertices
-                vertices.append(vertice)
-
-            vertices_w = np.array(vertices)[..., None]  ## 世界系下的 vertices
-            vertices_c = np.matmul(R_w2c[None, None, ...], vertices_w) + t_w2c[None, None, ...]  ## 当前图像的 相机系下的 vertices
-
-            ## 在project 到 2D 的时候，不用使用. 在场景训练的时候才使用
-            vertices_c = torch.from_numpy(vertices_c) - diff_centor_translation[...,None]       ## Centor Pose
-            all_bbxes.append(vertices_c * scale)
-        return all_bbxes
-
-    def project2Dbbx(self, bbx=None, img_idx=-1,f=0, cx=0, cy=0,img_file = None):
-        intrinsics_all = np.array([
-            [f, 0, cx, 0],
-            [0, f, cy, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
-        ])
-        vertices = bbx[img_idx]
-        bbx_img = cv.imread(str(img_file[img_idx*2]))
-        img = np.array(bbx_img).astype(np.float32).copy()
-        for idx in range(vertices.shape[0]):
-            uv = np.matmul(intrinsics_all[None, :3, :3], vertices[idx, ...]).squeeze(-1)
-            uv[:, :2] = (uv[:, :2] / uv[:, -1:])  ## 最后一维度归一化为1
-
-            left = int(min(uv[:, 0]))
-            right = int(max(uv[:, 0]))
-            top = int(min(uv[:, 1]))
-            bottom = int(max(uv[:, 1]))
-            img[top:bottom, left:right] = 0
-            # print(f"left:{left},right:{right},top{top},bottom:{bottom}\n")
-        cv.imwrite('projectbbx.png', np.concatenate((img , bbx_img ), axis=0))
-        exit()
-
-    def load_bbx_for_test(self,instance_imgs = None,bbx2w =None):
-        num_bbx = len(instance_imgs)
-
-        w2c = np.linalg.inv(bbx2w)
-        R_w2c = w2c[:3, :3]
-        t_w2c = w2c[:3, 3:]
-        all_bbxes = []
-        for img_id in range(num_bbx):
-            instance_map = instance_imgs[img_id]
-            car_global = instance_map[(instance_map > 26 * 1000) & (instance_map < 27 * 1000)]  ## Car 的global id 在26000-27000之间
-            set_idx = np.unique(car_global)
-
-            ## 找出该张图像对应的bbx 的 8个顶点（w系）
-            vertices = []
-            for idx in set_idx:
-                vertice = self.annotation_3d.objects[idx][-1].vertices
-                vertices.append(vertice)
-
-            vertices_w = np.array(vertices)[..., None]  ## 世界系下的 vertices
-            vertices_c = np.matmul(R_w2c[None, None, ...], vertices_w) + t_w2c[None, None, ...]  ## 当前图像的 相机系下的 vertices
-            all_bbxes.append(vertices_c)
-        return all_bbxes

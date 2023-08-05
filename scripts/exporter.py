@@ -52,11 +52,13 @@ class ExportPointCloud(Exporter):
     """Name of the depth output."""
     rgb_output_name: str = "rgb"
     """Name of the RGB output."""
+    output_semantic_pointcloud: bool = True
+    """Name of the semantics output. default output rgb """
     use_bounding_box: bool = True
     """Only query points within the bounding box"""
     bounding_box_min: Tuple[float, float, float] = (-1, -1, -1)
     """Minimum of the bounding box, used if use_bounding_box is True."""
-    bounding_box_max: Tuple[float, float, float] = (1, 1, 1)
+    bounding_box_max: Tuple[float, float, float] = (1, 1, 2.5)
     """Minimum of the bounding box, used if use_bounding_box is True."""
     num_rays_per_batch: int = 32768
     """Number of rays to evaluate per batch. Decrease if you run out of memory."""
@@ -74,7 +76,11 @@ class ExportPointCloud(Exporter):
         # Increase the batchsize to speed up the evaluation.
         pipeline.datamanager.train_pixel_sampler.num_rays_per_batch = self.num_rays_per_batch
 
-        pcd = generate_point_cloud(
+        semantic_output_name = None
+        if self.output_semantic_pointcloud:
+            semantic_output_name = "semantics"
+
+        pcd,pnts = generate_point_cloud(
             pipeline=pipeline,
             num_points=self.num_points,
             remove_outliers=self.remove_outliers,
@@ -86,12 +92,15 @@ class ExportPointCloud(Exporter):
             bounding_box_min=self.bounding_box_min,
             bounding_box_max=self.bounding_box_max,
             std_ratio=self.std_ratio,
+            semantic_output_name = semantic_output_name,
+            output_dir=self.output_dir
         )
         torch.cuda.empty_cache()
 
         CONSOLE.print(f"[bold green]:white_check_mark: Generated {pcd}")
         CONSOLE.print("Saving Point Cloud...")
         o3d.io.write_point_cloud(str(self.output_dir / "point_cloud.ply"), pcd)
+        np.save(str(self.output_dir / "pnts.npy"),pnts.float().cpu().numpy())
         print("\033[A\033[A")
         CONSOLE.print("[bold green]:white_check_mark: Saving Point Cloud")
 
@@ -207,7 +216,7 @@ class ExportPoissonMesh(Exporter):
     """If using xatlas for unwrapping, the pixels per side of the texture image."""
     target_num_faces: Optional[int] = 50000
     """Target number of faces for the mesh to texture."""
-    std_ratio: float = 10.0
+    std_ratio: float = 0.02
     """Threshold based on STD of the average distances across the point cloud to remove outliers."""
 
     def validate_pipeline(self, pipeline: Pipeline) -> None:
@@ -262,6 +271,7 @@ class ExportPoissonMesh(Exporter):
             bounding_box_min=self.bounding_box_min,
             bounding_box_max=self.bounding_box_max,
             std_ratio=self.std_ratio,
+            output_dir = self.output_dir,
         )
         torch.cuda.empty_cache()
         CONSOLE.print(f"[bold green]:white_check_mark: Generated {pcd}")

@@ -65,9 +65,9 @@ class NerfactoModelConfig(ModelConfig):
     """Nerfacto Model Config"""
 
     _target: Type = field(default_factory=lambda: NerfactoModel)
-    near_plane: float = 0.05
+    near_plane: float = 0.01
     """How far along the ray to start sampling."""
-    far_plane: float = 1000.0
+    far_plane: float = 20.0
     """How far along the ray to stop sampling."""
     background_color: Literal["random", "last_sample", "white", "black"] = "last_sample"
     """Whether to randomize the background color."""
@@ -76,7 +76,8 @@ class NerfactoModelConfig(ModelConfig):
     max_res: int = 1024
     """Maximum resolution of the hashmap for the base mlp."""
     log2_hashmap_size: int = 19
-    feature_per_level: int = 2
+
+    feature_per_level: int = 4
     """Size of the hashmap for the base mlp"""
     num_proposal_samples_per_ray: Tuple[int] = (256, 96)
     """Number of samples per ray for the proposal network."""
@@ -101,7 +102,7 @@ class NerfactoModelConfig(ModelConfig):
     """Arguments for the proposal density fields."""
     interlevel_loss_mult: float = 1.0
     """Proposal loss multiplier."""
-    distortion_loss_mult: float = 0.002
+    distortion_loss_mult: float = 0.005
     """Distortion loss multiplier."""
     lpisp_loss_mult: float = 0.1
     """Lpips Loss multiplier"""
@@ -110,6 +111,7 @@ class NerfactoModelConfig(ModelConfig):
     pred_normal_loss_mult: float = 0.001
     """Predicted normal loss multiplier."""
     pred_semantic_loss_mult: float = 0.01
+
     """Predicted Semantic loss multiplier."""
     use_proposal_weight_anneal: bool = True
     """Whether to use proposal weight annealing."""
@@ -205,7 +207,7 @@ class NerfactoModel(Model):
         )
         self.renderer_rgb = RGBRenderer(background_color=background_color)
         self.renderer_accumulation = AccumulationRenderer()
-        self.renderer_depth = DepthRenderer(method='expected')
+        self.renderer_depth = DepthRenderer()
         self.renderer_normals = NormalsRenderer()
         self.renderer_semantics = SemanticRenderer()
 

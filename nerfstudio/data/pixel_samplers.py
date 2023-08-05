@@ -318,19 +318,15 @@ class PixelSampler:  # pylint: disable=too-few-public-methods
 
         return collated_batch
 
-    def sample_fisheye(self, image_batch, step, patch_size=1):
+    def sample_fisheye(self, image_batch, mask = None):
         num_images, image_width, image_height, _ = image_batch.shape
-        mask = image_batch[:,:,:,-1]
-        nonzero_indices = torch.nonzero(mask, as_tuple=False)
+        nonzero_indices = torch.nonzero(torch.from_numpy(mask), as_tuple=False)
         chosen_indices = random.sample(range(len(nonzero_indices)), k=self.num_rays_per_batch)
         indices = nonzero_indices[chosen_indices]
-        c, y, x = (i.flatten() for i in torch.split(indices, 1, dim=-1))
-
-        ray_data = image_batch[c, y, x].to('cuda')
+        y, x = (i.flatten() for i in torch.split(indices, 1, dim=-1))
+        c = torch.randint(low=0,high=num_images,size=(self.num_rays_per_batch,))
         collated_batch = {
-            "ray_o": ray_data[..., 0:3],
-            "ray_d": ray_data[..., 3:6],
-            "image": ray_data[..., 6:9],
+            "image": image_batch[c, y, x].to('cuda'),
             "indices": torch.stack([c, y, x], dim=0).permute(1, 0)
         }
 

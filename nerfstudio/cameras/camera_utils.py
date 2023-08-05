@@ -463,3 +463,19 @@ def auto_orient_and_center_poses(
         oriented_poses = transform @ poses
 
     return oriented_poses, transform
+
+## set the last frame transform matrix as origin point
+def align_last_pose(poses,center_poses: bool = True):
+    translation = poses[..., :3, 3]
+
+    mean_translation = 2 * torch.mean(translation, dim=0)
+    if center_poses:
+        translation = mean_translation
+    else:
+        translation = torch.zeros_like(mean_translation)
+
+    transform = torch.eye(4)
+    transform[:3, 3] = -translation
+    transform = transform[:3, :]
+    oriented_poses = transform @ poses
+    return oriented_poses

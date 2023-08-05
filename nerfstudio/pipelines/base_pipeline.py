@@ -49,6 +49,7 @@ from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttrib
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import profiler
 from nerfstudio.utils.images import BasicImages
+from nerfstudio.cameras.fisheye import Fisheye
 
 
 def module_wrapper(ddp_or_model: Union[DDP, Model]) -> Model:
@@ -226,7 +227,7 @@ class VanillaPipeline(Pipeline):
         )
 
         if self.datamanager.config.dataparser.use_fisheye and self.test_mode == "val":
-            self.datamanager.load_fisheye_ray()
+            self.datamanager.fisheye = Fisheye(self.datamanager.train_dataset.dataparser.fisheye_dict)
 
 
         self.datamanager.to(device)
@@ -289,8 +290,6 @@ class VanillaPipeline(Pipeline):
         else:
             ''' Not add fisheye, Only perspective camera'''
             ray_bundle, batch = self.datamanager.next_train(step)
-        ## semantic class to one-hot vector
-
 
         ## 为ray_bundle 添加bbx test_id train_id 等属性
         ray_bundle.bbx = self.datamanager.train_dataset.cameras.bbx

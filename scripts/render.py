@@ -33,7 +33,7 @@ from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import ItersPerSecColumn
 from nerfstudio.utils import plotly_utils as vis
 from nerfstudio.data.utils.label import id2label,labels,assigncolor
-
+# from nerfstudio.data.utils.waymo_lable import assigncolor
 CONSOLE = Console(width=120)
 
 
@@ -156,9 +156,12 @@ class RenderTrajectory:
         N_per_seg = 10
         new_c2ws = []
         ## 每次间隔4帧，选取首帧和末帧，转动 360 角度
-        for i in range(0,len(camera)-1,4):
+        for i in range(0,len(camera)-1 //2,4):
             start_point = camera[i].camera_to_worlds[:,3].detach().cpu().numpy()
-            end_point = camera[i+3].camera_to_worlds[:, 3].detach().cpu().numpy()
+            end_idx = i + 3
+            if end_idx > len(camera)-1:
+                end_idx = len(camera)-1
+            end_point = camera[end_idx].camera_to_worlds[:, 3].detach().cpu().numpy()
 
             new_z = np.linspace(start_point[2],end_point[2],N_per_seg)
             new_xyz = []

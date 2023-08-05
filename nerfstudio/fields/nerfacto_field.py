@@ -97,6 +97,7 @@ class TCNNNerfactoField(Field):
         max_res: int = 1024,
         log2_hashmap_size: int = 19,
         num_layers_color: int = 3,
+        # num_layers_color: int = 2,
         num_layers_transient: int = 2,
         hidden_dim_color: int = 64,
         hidden_dim_transient: int = 64,
@@ -110,7 +111,7 @@ class TCNNNerfactoField(Field):
         use_individual_appearance_embedding:bool = False,
         inference_dataset = "off",
         spatial_distortion: Optional[SpatialDistortion] = None,
-        feature_per_level = 2,
+        feature_per_level = 4,
     ) -> None:
         super().__init__()
 

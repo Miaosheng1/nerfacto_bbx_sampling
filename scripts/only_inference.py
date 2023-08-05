@@ -23,6 +23,7 @@ from rich.progress import (
 from typing_extensions import Literal, assert_never
 from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+from torchmetrics.functional import structural_similarity_index_measure
 from skimage.metrics import structural_similarity
 from nerfstudio.cameras.camera_paths import get_path_from_json, get_spiral_path
 from nerfstudio.cameras.cameras import Cameras
@@ -35,6 +36,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import argparse
 import cv2
 from nerfstudio.data.utils.label import id2label,labels,assigncolor
+# from nerfstudio.data.utils.waymo_lable import id2label,labels,assigncolor
 
 CONSOLE = Console(width=120)
 
@@ -56,7 +58,7 @@ class RenderDatasets():
             os.system(f"rm -rf {self.root_dir}")
         self.task = parser_path.task
         self.is_leaderboard = parser_path.is_leaderboard
-        self.ssim = structural_similarity
+        self.ssim = structural_similarity_index_measure
         self.lpips = LearnedPerceptualImagePatchSimilarity()
 
     def generate_errorMap(self,ssim,index):
@@ -131,11 +133,11 @@ class RenderDatasets():
                         test_file.append(seq + lineData)
 
             else:
-                num_images = len(DataCache.image_cache)
-                # Test_orderInTrainlist = [2+i for i in range(num_images)]
+                num_images = len(DataCache.image_cache) // 2
+                Test_orderInTrainlist = [8+2*i for i in range(num_images)]
                 # Test_orderInTrainlist = [14,16,18,20,22]   ##  在20张的 demo 中，test_id 是[4,9,14,18]
-                # Test_orderInTrainlist = [4, 6, 8, 10, 12]  ##2652
-                Test_orderInTrainlist = [24, 26, 28, 30, 32]  ## 0652
+                # Test_orderInTrainlist = [20, 39]  ##waymo
+                # Test_orderInTrainlist = [24, 26, 28, 30, 32]  ## 0652
             pipeline.model.field.testset_embedding_index = Test_orderInTrainlist
         else:
             raise print("Task Input is trainset or testset")
@@ -188,6 +190,7 @@ class RenderDatasets():
                     elif rendered_output_name == "semantics":
                         semantic_labels = torch.argmax(torch.nn.functional.softmax(outputs["semantics"], dim=-1),dim=-1)
                         h, w = semantic_labels.shape[0], semantic_labels.shape[1]
+                        ## waymo dataset or kitti360 have different colormap
                         semantic_color_map = assigncolor(semantic_labels.reshape(-1)).reshape(h, w, 3)
                         render_semantics.append(semantic_color_map)
         CONSOLE.print("[bold green]Rendering Images Finished")
@@ -195,6 +198,7 @@ class RenderDatasets():
         ''' Output rgb depth and normal image'''
         sum_psnr = 0
         sum_lpips = 0
+        sum_ssim = 0
         for i in range(len(DataCache.image_cache.items()) // 2):
         # for i,image in sorted(DataCache.image_cache.items()):
             image = DataCache.image_cache.get(i)                       ## rgb_gt
@@ -209,6 +213,7 @@ class RenderDatasets():
                 self.generate_MSE_map(image.detach().cpu().numpy(),render_image[i],i)
                 psnr = -10. * np.log10(np.mean(np.square(image.detach().cpu().numpy() - render_image[i])))
                 lpips = self.lpips(image.unsqueeze(0).permute(0,3,1,2),torch.from_numpy(render_image[i]).unsqueeze(0).permute(0,3,1,2))
+                ssim = self.ssim(image.unsqueeze(0).permute(0,3,1,2),torch.from_numpy(render_image[i]).unsqueeze(0).permute(0,3,1,2))
 
                 # ## 求出限制 汽车特定区域的 PSNR
                 # os.makedirs(self.root_dir / "car_mse", exist_ok=True)
@@ -221,7 +226,8 @@ class RenderDatasets():
 
                 sum_psnr += psnr
                 sum_lpips += lpips
-                print("{} Mode image {} PSNR:{} LPIPS: {} ".format(self.task,i,psnr,lpips))
+                sum_ssim += ssim
+                print("{} Mode image {} PSNR:{} LPIPS: {} SSIM: {}".format(self.task,i,psnr,lpips,ssim))
 
                 ## semantics
                 media.write_image(self.root_dir / "semantics" / f'{self.task}_{i:02d}_pred.png', render_semantics[i])
@@ -230,6 +236,7 @@ class RenderDatasets():
 
         print(f"Average PSNR: {sum_psnr / len(DataCache.image_cache) * 2 }")
         print(f"Average LPIPS: {sum_lpips / len(DataCache.image_cache) *2}")
+        print(f"Average LPIPS: {sum_ssim / len(DataCache.image_cache) * 2}")
 
         for i in range(len(render_depth)):
             pred_depth = render_depth[i].squeeze(2)
@@ -248,29 +255,6 @@ class RenderDatasets():
                 media.write_image(self.root_dir/f'{self.task}_{i:02d}_normal.png', render_normal[i])
         CONSOLE.print(f"[bold blue] Store image to {self.root_dir}")
 
-"""  Compaer the directory image metric"""
-# def compare_dir(dir1,dir2):
-#     imgs1 = sorted(os.listdir(dir1))
-#     imgs2 = sorted(os.listdir(dir2))
-#     from PIL import Image
-#     LPIPS = LearnedPerceptualImagePatchSimilarity()
-#     def get_img(pth):
-#         return np.array(Image.open(pth), dtype=np.float32)/255.0
-#     sum_psnr = 0
-#     sum_lpips = 0
-#     for gt_img,render_img in zip(imgs1,imgs2):
-#         gt_img = torch.from_numpy(get_img(os.path.join(dir1,gt_img)))
-#         render_img = torch.from_numpy(get_img(os.path.join(dir2,render_img)))
-#
-#         psnr = -10. * np.log10(np.mean(np.square(gt_img.numpy() - render_img.numpy())))
-#         lpips = LPIPS(gt_img.unsqueeze(0).permute(0, 3, 1, 2),
-#                            render_img.unsqueeze(0).permute(0, 3, 1, 2))
-#         print(" Psnr:   {},Lpips   {}".format(psnr,lpips))
-#         sum_psnr += psnr
-#         sum_lpips += lpips
-#     print("Average Psnr:{}".format(sum_psnr/len(imgs1)))
-#     print("Average Lpips:{}".format(sum_lpips / len(imgs1)))
-#     return
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -281,7 +265,5 @@ if __name__ == "__main__":
 
     RenderDatasets(config).main()
 
-    # data_gt = "zipnerf/gt"
-    # target_rgb = "zipnerf/2625"
-    # compare_dir(dir1=data_gt, dir2=target_rgb)
+
 

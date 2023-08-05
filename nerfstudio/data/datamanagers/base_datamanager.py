@@ -45,6 +45,7 @@ from nerfstudio.data.dataparsers.phototourism_dataparser import PhototourismData
 from nerfstudio.data.dataparsers.heritage_dataparser import HeritageDataParserConfig
 from nerfstudio.data.dataparsers.record3d_dataparser import Record3DDataParserConfig
 from nerfstudio.data.dataparsers.sdfstudio_dataparser import SDFStudioDataParserConfig
+from nerfstudio.data.dataparsers.waymo_dataparser import WaymoDataParserConfig
 from nerfstudio.data.dataparsers.monosdf_dataparser import MonoSDFDataParserConfig
 from nerfstudio.data.datasets.base_dataset import InputDataset, GeneralizedDataset
 from nerfstudio.data.pixel_samplers import EquirectangularPixelSampler, PixelSampler
@@ -75,6 +76,7 @@ AnnotatedDataParserUnion = tyro.conf.OmitSubcommandPrefixes[  # Omit prefixes of
             "monosdf-data": MonoSDFDataParserConfig(),
             "sdfstudio-data": SDFStudioDataParserConfig(),
             "heritage-data": HeritageDataParserConfig(),
+            "waymo-data": WaymoDataParserConfig(),
         },
         prefix_names=False,  # Omit prefixes in subcommands themselves.
     )
@@ -322,6 +324,8 @@ class VanillaDataManager(DataManager):  # pylint: disable=abstract-method
 
         self.train_dataset = self.create_train_dataset()
         self.eval_dataset = self.create_eval_dataset()
+
+        self.fisheye = None
         super().__init__()
 
     def create_train_dataset(self) -> InputDataset:
@@ -554,10 +558,15 @@ class VanillaDataManager(DataManager):  # pylint: disable=abstract-method
 
     def next_train_fisheye_shuffle(self, step: int) -> Tuple[RayBundle, Dict]:
         self.train_count += 1
-        # if step % 5 == 0:
-        #     batch = self.train_pixel_sampler.sample_fisheye_with_patch(self.batch_fisheye_rays,step,patch_size=32)
-        # else:
-        batch = self.train_pixel_sampler.sample_fisheye(self.batch_fisheye_rays, step)
+        num_perspective_images = len(self.train_dataset)
+        batch = self.train_pixel_sampler.sample_fisheye(self.fisheye.fisheye_imgs, mask=self.fisheye.mask)
+
+        ray_indices = batch["indices"]
+
+        ## debug fisheye class
+        ray_indices = torch.tensor([[1,41,52],[2,47,156]])
+
+        ray_bundle = self.fisheye.generate_fisheye_ray(ray_indices)
 
         # batch_size = 4096
         # selected_index = np.random.randint(0,self.batch_fisheye_rays.shape[0],size = batch_size )

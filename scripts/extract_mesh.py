@@ -33,9 +33,11 @@ class ExtractMesh:
     # extract the mesh using occupancy field (unisurf) or SDF, default sdf
     is_occupancy: bool = False
     """Minimum of the bounding box."""
-    bounding_box_min: Tuple[float, float, float] = (-1, -0.3, -0.8)
+    bounding_box_min: Tuple[float, float, float] = (-1, -0.3, -0.8) ## for kitti360
+    # bounding_box_min: Tuple[float, float, float] = (-1, -0.3, -2.5)
     """Maximum of the bounding box."""
-    bounding_box_max: Tuple[float, float, float] = (1, 0.3, 2.5)
+    bounding_box_max: Tuple[float, float, float] = (1, 0.3, 2.5)  ## for kitti360
+    # bounding_box_max: Tuple[float, float, float] = (1, 0.3, 0)
     # used for sdf-based method
     is_sdf: bool = False
     # used for nerfacto, vanilla-nerf, other density-based method

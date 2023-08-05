@@ -128,7 +128,7 @@ class RaySamples(TensorDataclass):
     times: Optional[TensorType[..., 1]] = None
     """Times at which rays are sampled"""
 
-    def get_weights(self, densities: TensorType[..., "num_samples", 1]) -> TensorType[..., "num_samples", 1]:
+    def get_weights(self, densities: TensorType[..., "num_samples", 1],output_transmittance = False) -> TensorType[..., "num_samples", 1]:
         """Return weights based on predicted densities
 
         Args:
@@ -149,7 +149,10 @@ class RaySamples(TensorDataclass):
 
         weights = alphas * transmittance  # [..., "num_samples"]
 
-        return weights
+        if output_transmittance:
+            return weights,transmittance
+        else:
+            return weights
 
     def get_weights_and_transmittance(
         self, densities: TensorType[..., "num_samples", 1]
